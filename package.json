@@ -2,17 +2,22 @@
   "name": "todo-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first todo manager: CLI, interactive TUI and local web service/REST API; web UI/LLM/agents in later releases",
+  "description": "Local-first todo manager: CLI, interactive TUI, local web service/REST API and web UI; LLM/agents in later releases",
   "type": "module",
   "scripts": {
-    "test": "go test ./... && npm run test:tui",
+    "test": "go test ./... && npm run test:web && npm run test:tui",
     "test:go": "go test ./...",
+    "test:web": "node --test 'apps/web/test/*.test.mjs'",
     "test:tui": "npm run build && node --test e2e/tui.pty.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:all": "TODO_E2E_BROWSERS=chromium,firefox,webkit playwright test",
     "build": "go build -o bin/todo ./cmd/todo",
+    "dev:web": "go build -o bin/todo ./cmd/todo && TODO_CLI_WEB_DIR=apps/web ./bin/todo serve --open",
     "lint": "gofmt -l . && go vet ./...",
     "postinstall": "node scripts/fix-node-pty.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "node-pty": "^1.1.0"
   }
 }

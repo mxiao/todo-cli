@@ -284,3 +284,50 @@ func (s *Store) Stats() (Stats, error) {
 		fmtTime(s.clock())).Scan(&st.Overdue)
 	return st, err
 }
+
+// Facet is one tag or category with the number of live tasks using it.
+type Facet struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// Facets lists the tags and categories of live (not deleted) tasks, most
+// used first; the web UI offers them as filter and input choices.
+type Facets struct {
+	Tags       []Facet `json:"tags"`
+	Categories []Facet `json:"categories"`
+}
+
+// Facets returns every tag and category in use by live tasks.
+func (s *Store) Facets() (Facets, error) {
+	f := Facets{Tags: []Facet{}, Categories: []Facet{}}
+	queries := []struct {
+		sql string
+		out *[]Facet
+	}{
+		{`SELECT g.tag, count(*) FROM task_tags g JOIN tasks t ON t.id = g.task_id
+			WHERE t.deleted_at IS NULL GROUP BY g.tag ORDER BY 2 DESC, 1`, &f.Tags},
+		{`SELECT category, count(*) FROM tasks WHERE deleted_at IS NULL AND category != ''
+			GROUP BY category ORDER BY 2 DESC, 1`, &f.Categories},
+	}
+	for _, q := range queries {
+		rows, err := s.db.Query(q.sql)
+		if err != nil {
+			return f, err
+		}
+		for rows.Next() {
+			var v Facet
+			if err := rows.Scan(&v.Name, &v.Count); err != nil {
+				rows.Close()
+				return f, err
+			}
+			*q.out = append(*q.out, v)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return f, err
+		}
+	}
+	return f, nil
+}

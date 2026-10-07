@@ -13,8 +13,9 @@ import (
 
 func (s *Server) routes() {
 	m := s.mux
-	m.HandleFunc("GET /{$}", s.handleIndex)
+	m.HandleFunc("/", s.handleStatic)
 	m.HandleFunc("GET /api/health", s.handleHealth)
+	m.HandleFunc("GET /api/facets", s.handleFacets)
 	m.HandleFunc("GET /api/events", s.handleEvents)
 	m.HandleFunc("GET /api/tasks", s.handleList)
 	m.HandleFunc("POST /api/tasks", s.handleCreate)
@@ -93,7 +94,8 @@ func setETag(w http.ResponseWriter, t *core.Task) {
 
 // ---- read endpoints ----
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+// handleFallbackIndex is the landing page when no web UI assets are available.
+func (s *Server) handleFallbackIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, indexHTML)
@@ -109,6 +111,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "version": s.opts.Version, "revision": rev, "schema_version": schema, "data_dir": s.store.DataDir(),
 	})
+}
+
+// handleFacets lists the tags and categories in use, for filter menus.
+func (s *Server) handleFacets(w http.ResponseWriter, r *http.Request) {
+	f, err := s.store.Facets()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {

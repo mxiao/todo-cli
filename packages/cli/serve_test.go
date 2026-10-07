@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -197,5 +200,43 @@ func getJSON(t *testing.T, url string, v any) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServeWebUI(t *testing.T) {
+	h := newHarness(t)
+	page := func() (int, string) {
+		t.Helper()
+		out, stop := h.serve("--json", "--port", "0")
+		defer stop()
+		var info serveInfo
+		if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &info); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Get(info.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	if code, body := page(); code != 200 || !strings.Contains(body, `src="/js/app.js"`) {
+		t.Fatalf("embedded web UI: %d %s", code, body)
+	}
+
+	// TODO_CLI_WEB_DIR serves the page from disk.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<p>dev page</p>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.env[EnvWebDir] = dir
+	if _, body := page(); body != "<p>dev page</p>" {
+		t.Fatalf("web dir page: %s", body)
+	}
+
+	h.env[EnvWebDir] = filepath.Join(dir, "missing")
+	if _, errOut, code := h.run("serve"); code != ExitUsage || !strings.Contains(errOut, EnvWebDir) {
+		t.Fatalf("missing web dir: exit %d %s", code, errOut)
 	}
 }
