@@ -47,6 +47,16 @@ func (s *Store) Undo() (*UndoResult, error) {
 	if err := json.Unmarshal([]byte(raw), &snaps); err != nil {
 		return nil, fmt.Errorf("operation %d: corrupt snapshot: %w", op.ID, err)
 	}
+	res, err := s.undoSnapshots(tx, op, snaps)
+	if err != nil {
+		return nil, err
+	}
+	return res, tx.Commit()
+}
+
+// undoSnapshots restores the pre-operation state of every task an
+// operation touched and marks it undone, inside tx.
+func (s *Store) undoSnapshots(tx *sql.Tx, op Operation, snaps []snapshot) (*UndoResult, error) {
 	x := &txn{s: s, tx: tx, now: s.clock(), opID: op.ID}
 	res := &UndoResult{Operation: op, Restored: []Task{}, Removed: []string{}}
 	action := "undo_" + op.Kind
@@ -82,5 +92,5 @@ func (s *Store) Undo() (*UndoResult, error) {
 	if _, err := tx.Exec(`UPDATE operations SET undone_at = ? WHERE id = ?`, fmtTime(x.now), op.ID); err != nil {
 		return nil, err
 	}
-	return res, tx.Commit()
+	return res, nil
 }

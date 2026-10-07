@@ -11,7 +11,7 @@ import (
 
 // PatchFields lists the JSON fields DecodePatch accepts.
 var PatchFields = []string{"title", "description", "notes", "category", "parent_id", "due_at", "priority",
-	"tags", "add_tags", "remove_tags", "status", "version"}
+	"tags", "add_tags", "remove_tags", "depends_on", "status", "version"}
 
 // DecodePatch parses a JSON task edit as sent by the web UI and API clients:
 //
@@ -86,6 +86,15 @@ func DecodePatch(raw []byte) (TaskPatch, error) {
 				tags = []string{}
 			}
 			p.Tags = &tags
+		case "depends_on":
+			var deps []string
+			if !isNull(v) {
+				err = json.Unmarshal(v, &deps)
+			}
+			if deps == nil {
+				deps = []string{}
+			}
+			p.DependsOn = &deps
 		case "add_tags":
 			err = json.Unmarshal(v, &p.AddTags)
 		case "remove_tags":
@@ -131,6 +140,7 @@ func PatchedFields(p TaskPatch) []string {
 	add("due_at", p.DueAt != nil || p.ClearDue)
 	add("priority", p.Priority != nil)
 	add("tags", p.Tags != nil || len(p.AddTags) > 0 || len(p.RemoveTags) > 0)
+	add("depends_on", p.DependsOn != nil)
 	add("status", p.Status != nil)
 	slices.Sort(out)
 	return out

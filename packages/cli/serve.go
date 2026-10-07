@@ -103,7 +103,13 @@ func cmdServe(a *app, args []string) error {
 		defer stop()
 	}
 	log := slog.New(slog.NewTextHandler(a.env.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	srv := server.New(s, server.Options{Logger: log, Version: Version, Assets: assets})
+	// Model features share the CLI's configuration; when they cannot be
+	// opened the server still serves every task endpoint (FR-606).
+	svc, err := a.llm()
+	if err != nil {
+		log.Warn("model features unavailable", "err", err)
+	}
+	srv := server.New(s, server.Options{Logger: log, Version: Version, Assets: assets, LLM: svc})
 	return srv.Serve(ctx, ln)
 }
 

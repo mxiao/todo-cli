@@ -117,6 +117,8 @@ type Task struct {
 	Tags        []string   `json:"tags"`
 	Category    string     `json:"category"`
 	ParentID    string     `json:"parent_id"`
+	// DependsOn lists the ids of tasks that must be finished first.
+	DependsOn   []string   `json:"depends_on"`
 	Notes       string     `json:"notes"`
 	Status      Status     `json:"status"`
 	Position    float64    `json:"position"`
@@ -134,6 +136,7 @@ func (t *Task) Deleted() bool { return t.DeletedAt != nil }
 func (t *Task) clone() *Task {
 	c := *t
 	c.Tags = slices.Clone(t.Tags)
+	c.DependsOn = slices.Clone(t.DependsOn)
 	return &c
 }
 
@@ -146,6 +149,7 @@ type NewTask struct {
 	Tags        []string
 	Category    string
 	ParentID    string
+	DependsOn   []string
 	Notes       string
 	Status      Status
 }
@@ -162,6 +166,7 @@ type TaskPatch struct {
 	RemoveTags  []string
 	Category    *string
 	ParentID    *string
+	DependsOn   *[]string
 	Notes       *string
 	Status      *Status
 	// ExpectedVersion enables optimistic locking when non-zero: the update
@@ -263,5 +268,21 @@ func validateTask(t *Task) error {
 	}
 	t.Tags = NormalizeTags(t.Tags)
 	t.Category = strings.TrimSpace(t.Category)
+	t.DependsOn = normalizeIDs(t.DependsOn)
+	if slices.Contains(t.DependsOn, t.ID) && t.ID != "" {
+		return fmt.Errorf("%w: a task cannot depend on itself", ErrInvalid)
+	}
 	return nil
+}
+
+// normalizeIDs trims, drops empties and duplicates, and sorts task ids.
+func normalizeIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
 }

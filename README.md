@@ -12,11 +12,13 @@ packages/core/     task model + SQLite store (single source of truth for every e
 packages/cli/      non-interactive CLI (flags + --json), shell completion, `todo tui` launcher
 packages/tui/      interactive full-screen terminal UI (keyboard + mouse)
 packages/server/   local web service: REST API + live change events over the same store, serves apps/web
+packages/llm/      OpenAI-compatible model client, permission policy, NL intake, decisions, self-optimisation
+packages/prompt/   prompt summaries → versioned, reusable templates with {{variables}}
 apps/web/          browser task manager (plain HTML/CSS/ES modules, embedded into the binary)
 e2e/               node-pty end-to-end tests of the TUI; e2e/web: Playwright tests of the web UI
 ```
 
-Later releases add LLM features and agents
+Model features (`packages/llm`, `packages/prompt`) and later the agents build
 on top of `packages/core`. All of them share the same task IDs, fields and status rules.
 
 ### Stack decision
@@ -93,10 +95,80 @@ Add `--json` to any command for machine-readable output on stdout. Errors go to 
 
 ### Model configuration
 
-`todo status` reports the model configuration read from the environment: `TODO_CLI_MODEL_PROVIDER`,
-`TODO_CLI_MODEL`, `TODO_CLI_MODEL_BASE_URL` and `TODO_CLI_MODEL_API_KEY`. The key is never printed,
-and credentials or query strings in the base URL are stripped. Task management works without any
-model configured.
+Any OpenAI-compatible service works (OpenAI, DeepSeek, OpenRouter, Moonshot, DashScope, Ollama,
+LM Studio or a custom `--base-url`); the default is `openai` / `gpt-4o-mini`. Profiles live in
+`<data dir>/llm.json` (mode 0600) and **never contain a key**: the key comes from an environment
+variable first (`TODO_CLI_MODEL_API_KEY`, or the profile's `--key-env`), then the macOS keychain
+(service `todo-cli`, account = profile name).
+
+```sh
+todo llm set --provider deepseek --model deepseek-chat   # change the active profile
+todo llm set --profile local --provider ollama --model qwen2.5 --no-key
+todo llm set-key                       # reads the key from stdin into the keychain
+todo llm test                          # connection test; on failure: retry, or switch:
+todo llm use local                     # switch the active profile
+todo llm status                        # model, key source (never the key), mode, confirm list
+```
+
+`TODO_CLI_MODEL_PROVIDER`, `TODO_CLI_MODEL`, `TODO_CLI_MODEL_BASE_URL`, `TODO_CLI_MODEL_PROFILE` and
+`TODO_CLI_LLM_MODE` override the profile for one process. Failures are classified
+(`llm_not_configured`, `llm_auth_failed`, `llm_not_found`, `llm_rate_limited`, `llm_server_error`,
+`llm_timeout`, `llm_unreachable`, `llm_bad_response`) with a Chinese hint, whether a retry may help
+and which other profiles exist. Without a usable model, task management, the TUI and the web UI work
+unchanged; decisions fall back to local ranking rules and prompt summaries to local line rules
+(both marked as degraded).
+
+**Privacy.** Only `title`, `description`, `tags`, `status` and `priority` are sent by default
+(decisions add `due_at` and `depends_on`; change with `todo llm fields`). Tasks are referenced as
+`T1…`, never by id. Keys, tokens, passwords and `Bearer …` values are redacted from everything sent
+to the model and from everything stored (sessions, call log, command output, templates).
+
+### Permission modes
+
+`todo llm mode suggest|confirm|auto` (仅建议 / 执行前确认 — default / 自动执行). In auto mode
+authorised operations run without asking: creating tasks and changing priority, due time, status,
+dependencies and order. Deleting, overwriting a title/description, sending data out (`curl`,
+`git push`, …), committing and system configuration (`defaults`, `launchctl`, `brew install`, …)
+always wait for confirmation; `todo llm confirm add "npm publish"` (or a kind such as `agent.start`,
+or a category such as `shell`) adds more. `sudo`/`su` are refused in every mode: commands run without
+a shell, with the user's own permissions and without the model keys in their environment.
+`todo llm commands off` stops the model from proposing commands; `todo llm agent add coder -- claude -p`
+registers a command-line agent the model may start (the task prompt goes to stdin and is shown first).
+
+### Natural language and decisions (`todo ai`)
+
+```sh
+todo ai add 明天下午前完成发布准备：先整理需求，再更新页面，最后检查链接
+todo ai add --select 3f2a 这个很急，再加个子任务：收集数据   # update / subtask of the selection
+todo ai answer <session> 周五 18:00      # the model asks at most once when key facts are missing
+todo ai edit <session> 2 --title … --due "明天 18:00" --priority high --tag web --dep N1
+todo ai apply <session> [1 2]            # accept one/several/all · todo ai reject … · todo ai undo …
+todo ai decide [--select ID]             # summary, risks, order with reasons/focus/estimate, changes
+todo ai redecide <session> 太激进了       # reject and decide again with feedback
+todo ai optimize                         # the model reviews its own results and suggests changes
+todo ai config versions|restore <v>|rollback   # versioned prompts, ranking rules, routing, failure handling
+todo ai list / show <session>; todo llm calls / actions   # audit trail
+```
+
+Every proposal is a session with numbered items, a before → after diff, and a result
+(新增 / 修改 / 未执行 / 失败). Deadlines are only kept when the user's own words state them. Task
+changes are applied as one undoable operation with history actor `llm` (the operation summary names
+the session); undoing an item reverts the accept step it was applied in. Self-optimisation
+suggestions never apply themselves (not even in auto mode) and cannot widen permissions; applying,
+undoing or restoring one writes a new configuration version.
+
+### Prompt templates (`todo prompt`)
+
+```sh
+todo prompt summarize long-prompt.md --save --name 周报分析   # goal/context/constraints/steps/output/variables
+todo prompt show 周报分析 [--original] [--version 1]; todo prompt versions 周报分析
+todo prompt edit 周报分析 --step … --constraint … [--body-file body.md]   # each edit is a new version
+todo prompt rollback 周报分析 [1]        # restore an older version as a new version
+todo prompt copy 周报分析 [--clipboard]  # duplicate, or copy the text to the clipboard
+todo prompt export 周报分析 --format md|txt|json [-o file]   # json keeps the original + all versions
+todo prompt render 周报分析 --var 产品=FlowOS
+todo prompt task 周报分析 --var 产品=FlowOS   # agent task whose description is the final prompt
+```
 
 ## Local web service (`todo serve`)
 
@@ -166,6 +238,20 @@ Task ids may be unique prefixes, as in the CLI.
 | `GET /api/tasks/{id}/conflicts[?all=1]`, `GET /api/conflicts/{cid}` | rejected edits with a three-way field diff |
 | `POST /api/conflicts/{cid}/resolve` | `{"resolution": "mine"\|"theirs", "version"?}` |
 | `GET /api/events` | server-sent events (see below) |
+
+Model and prompt endpoints (keys are never accepted or returned): `GET /api/llm/status`,
+`POST /api/llm/test` `{profile?}`, `POST /api/llm/use` `{profile}`, `POST /api/llm/mode` `{mode}`,
+`PUT /api/llm/confirm-list` `{entries}`, `POST /api/llm/intake` `{text, selected?, mode?, profile?}`,
+`POST /api/llm/decide` `{selected?, mode?, feedback?}`, `POST /api/llm/optimize`,
+`GET /api/llm/sessions[?kind=]`, `GET /api/llm/sessions/{sid}`,
+`POST /api/llm/sessions/{sid}/answer|redecide|apply|reject|undo` (`{items: [n…]}`; none = all),
+`PATCH /api/llm/sessions/{sid}/items/{n}`, `GET /api/llm/config[/versions]`,
+`POST /api/llm/config/rollback`, `POST /api/llm/config/versions/{v}/restore`, `GET /api/llm/calls|actions`;
+`GET|POST /api/prompts`, `POST /api/prompts/summarize` `{text, save?, name?, local?}`,
+`GET|PUT|DELETE /api/prompts/{pid}`, `GET /api/prompts/{pid}/versions`,
+`POST /api/prompts/{pid}/rollback|copy|render|task`, `GET /api/prompts/{pid}/export?format=md|txt|json`.
+Model failures answer `503` with `{code, message, hint, retryable, profiles}`; session state errors `409 invalid_state`;
+missing template variables `400 missing_variables`.
 
 Status codes: `400 invalid_input|invalid_json|ambiguous_id`, `404 not_found`, `409 version_conflict|nothing_to_undo|conflict_resolved`,
 `410 task_deleted`, `413`, `415` (bodies must be `application/json`), `428 version_required`.

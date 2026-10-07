@@ -26,6 +26,8 @@ import (
 
 	web "github.com/mxiao/todo-cli/apps/web"
 	"github.com/mxiao/todo-cli/packages/core"
+	"github.com/mxiao/todo-cli/packages/llm"
+	"github.com/mxiao/todo-cli/packages/prompt"
 )
 
 const (
@@ -63,6 +65,9 @@ type Options struct {
 	// the binary (apps/web). Point it at os.DirFS("apps/web") to work on the
 	// page without rebuilding.
 	Assets fs.FS
+	// LLM serves the model and prompt endpoints; nil opens one with the
+	// real model client, keychain and environment.
+	LLM *llm.Service
 }
 
 // Server serves the REST API and event stream for one store.
@@ -73,6 +78,10 @@ type Server struct {
 	mux    *http.ServeMux
 	hub    *hub
 	static map[string]staticFile
+
+	llm     *llm.Service
+	prompts *prompt.Library
+	llmErr  string
 }
 
 // New builds a server over store and starts its change watcher; call Close
@@ -98,6 +107,7 @@ func New(store *core.Store, opts Options) *Server {
 	}
 	s.static = static
 	s.hub = newHub(store, opts.PollInterval, log)
+	s.openLLM()
 	s.routes()
 	return s
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mxiao/todo-cli/packages/core"
+	"github.com/mxiao/todo-cli/packages/llm"
 )
 
 // Tuesday 2026-10-06 10:00 in UTC+8.
@@ -23,10 +24,12 @@ type harness struct {
 	env   map[string]string
 	stdin string
 	tick  int
+	// hooks inject mock models; the keychain is always in memory.
+	hooks LLMHooks
 }
 
 func newHarness(t *testing.T) *harness {
-	return &harness{t: t, dir: t.TempDir(), env: map[string]string{}}
+	return &harness{t: t, dir: t.TempDir(), env: map[string]string{}, hooks: LLMHooks{Secrets: &llm.MemorySecrets{}}}
 }
 
 func (h *harness) run(args ...string) (stdout, stderr string, code int) {
@@ -38,6 +41,7 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 			h.tick++
 			return now.Add(time.Duration(h.tick) * time.Millisecond)
 		},
+		LLM: h.hooks,
 	}
 	code = Run(append([]string{"--data-dir", h.dir}, args...), env)
 	return out.String(), errb.String(), code
