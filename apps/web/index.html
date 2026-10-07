@@ -18,6 +18,11 @@
     <button type="button" id="new-task" data-testid="new-task" title="打开完整表单 (N)">详细新增…</button>
   </form>
   <div class="topbar-actions">
+    <span id="ai-model-chip" class="ai-chip" data-testid="ai-model-chip" data-state="loading" title="当前模型">模型…</span>
+    <label class="ai-mode-label" title="大模型权限模式">权限
+      <select id="ai-mode" data-testid="ai-mode" aria-label="大模型权限模式" disabled></select>
+    </label>
+    <button type="button" id="ai-open" data-testid="ai-open" title="大模型与智能体 (i)">AI 助手</button>
     <span id="live-status" class="live" data-testid="live-status" data-state="connecting" role="status">连接中…</span>
     <button type="button" id="undo" data-testid="undo" title="撤销最近一次操作 (u)">撤销</button>
     <button type="button" id="help" data-testid="help" title="快捷键 (?)" aria-label="快捷键帮助">?</button>
@@ -69,6 +74,81 @@
   </section>
   <aside id="detail" class="detail" data-testid="detail" hidden aria-label="任务详情"></aside>
 </main>
+
+<aside id="ai-panel" class="ai-panel" data-testid="ai-panel" hidden aria-label="大模型与智能体">
+  <header class="ai-head">
+    <h2>AI 助手</h2>
+    <nav id="ai-tabs" class="tabs" data-testid="ai-tabs" role="tablist"></nav>
+    <button type="button" id="ai-close" class="link close" data-testid="ai-close" aria-label="关闭 AI 助手">×</button>
+  </header>
+  <div id="ai-banner" class="banner error" data-testid="ai-banner" hidden role="alert"></div>
+
+  <section id="ai-tab-intake" class="ai-tab" data-tab="intake" data-testid="ai-tab-intake" hidden>
+    <form id="intake-form" class="ai-form" data-testid="intake-form" autocomplete="off">
+      <label>用自然语言描述要做的事（可以一次描述多件）
+        <textarea id="intake-text" data-testid="intake-text" rows="3" maxlength="8000"
+          placeholder="例如：明天下午前完成产品发布准备，先整理需求，再更新页面，最后让命令行智能体检查链接"></textarea>
+      </label>
+      <div class="ai-form-row">
+        <label class="inline"><input type="checkbox" id="intake-selected" data-testid="intake-selected"> 结合已选中的任务（修改或新建子任务）</label>
+        <select id="intake-mode" data-testid="intake-mode" aria-label="本次权限模式"></select>
+        <button type="submit" class="primary" id="intake-submit" data-testid="intake-submit">解析预览</button>
+      </div>
+    </form>
+    <div id="intake-session" data-testid="intake-session"></div>
+  </section>
+
+  <section id="ai-tab-decide" class="ai-tab" data-tab="decide" data-testid="ai-tab-decide" hidden>
+    <form id="decide-form" class="ai-form" data-testid="decide-form" autocomplete="off">
+      <div class="ai-form-row">
+        <span class="muted">大模型结合截止时间、优先级和状态给出下一步建议；有选中任务时只分析选中项。</span>
+        <select id="decide-mode" data-testid="decide-mode" aria-label="本次权限模式"></select>
+        <button type="submit" class="primary" id="decide-submit" data-testid="decide-submit">请求决策建议</button>
+        <button type="button" id="optimize-submit" data-testid="optimize-submit" title="分析失败记录，提出提示词、排序和路由的优化建议">自我优化建议</button>
+      </div>
+    </form>
+    <div id="decide-session" data-testid="decide-session"></div>
+  </section>
+
+  <section id="ai-tab-runs" class="ai-tab" data-tab="runs" data-testid="ai-tab-runs" hidden>
+    <div class="ai-form-row">
+      <select id="runs-filter" data-testid="runs-filter" aria-label="运行状态筛选"></select>
+      <button type="button" id="runs-refresh" data-testid="runs-refresh">刷新</button>
+      <span id="runs-updated" class="muted" data-testid="runs-updated"></span>
+    </div>
+    <div class="runs-layout">
+      <ul id="runs-list" class="runs-list" data-testid="runs-list"></ul>
+      <div id="run-view" class="run-view" data-testid="run-view"></div>
+    </div>
+  </section>
+
+  <section id="ai-tab-prompts" class="ai-tab" data-tab="prompts" data-testid="ai-tab-prompts" hidden>
+    <details id="summarize-box" class="ai-box" data-testid="summarize-box">
+      <summary>总结新的提示词模板</summary>
+      <form id="summarize-form" class="ai-form" autocomplete="off">
+        <label>原始提示词
+          <textarea id="summarize-text" data-testid="summarize-text" rows="5"></textarea>
+        </label>
+        <div class="ai-form-row">
+          <input id="summarize-name" data-testid="summarize-name" placeholder="模板名称（保存时必填）" aria-label="模板名称">
+          <button type="submit" id="summarize-submit" data-testid="summarize-submit">总结并保存</button>
+        </div>
+      </form>
+    </details>
+    <div class="runs-layout">
+      <ul id="prompt-list" class="runs-list" data-testid="prompt-list"></ul>
+      <div id="prompt-view" class="run-view" data-testid="prompt-view"></div>
+    </div>
+  </section>
+
+  <section id="ai-tab-config" class="ai-tab" data-tab="config" data-testid="ai-tab-config" hidden>
+    <div id="config-view" data-testid="config-view"></div>
+  </section>
+
+  <section id="ai-tab-history" class="ai-tab" data-tab="history" data-testid="ai-tab-history" hidden>
+    <div id="ai-history-view" data-testid="ai-history-view"></div>
+  </section>
+</aside>
 
 <div id="toasts" class="toasts" data-testid="toasts" aria-live="polite"></div>
 
@@ -147,6 +227,7 @@
       <tr><td><kbd>Space</kbd></td><td>选中 / 取消选中（批量）</td><td><kbd>Ctrl/⌘</kbd>+<kbd>a</kbd></td><td>全选</td></tr>
       <tr><td><kbd>+</kbd> <kbd>-</kbd></td><td>提高 / 降低优先级</td><td><kbd>K</kbd> <kbd>J</kbd></td><td>手动顺序上移 / 下移</td></tr>
       <tr><td><kbd>u</kbd></td><td>撤销最近一次操作</td><td><kbd>?</kbd></td><td>显示本帮助</td></tr>
+      <tr><td><kbd>i</kbd></td><td>打开 / 关闭 AI 助手</td><td><kbd>g</kbd></td><td>为当前任务启动智能体</td></tr>
     </tbody>
   </table>
   <p class="muted">与命令行 <code>todo</code> 共用同一份本地数据；任何一端的修改都会实时出现在这里。</p>

@@ -5,6 +5,7 @@
 import { api, ApiError } from './api.js';
 import { createStore } from './state.js';
 import { connectLive } from './live.js';
+import { initAI } from './ai.js';
 import { h, $, $$, clear, options } from './dom.js';
 import {
   STATUSES, STATUS_LABELS, FIELD_LABELS, PRIORITIES, PRIORITY_LABELS, STATUS_TABS, SORTS, DUE_FILTERS,
@@ -39,6 +40,7 @@ const store = createStore({
 let editor = null; // { mode: 'new'|'edit', task, version, remoteVersion }
 let conflict = null; // the conflict view shown in the dialog
 let lastClickedId = null;
+let aiUI = null; // model and agent views (ai.js)
 
 // ---------------------------------------------------------------- loading
 
@@ -113,6 +115,7 @@ function setView(patch) {
 }
 
 function openTask(id) {
+  if (!id && aiUI) aiUI.onDetailClosed();
   store.set({ openId: id, cursor: id || store.get().cursor, detail: id === store.get().openId ? store.get().detail : null });
   loadDetail(id);
 }
@@ -489,6 +492,10 @@ function renderDetail() {
     detailField('版本', String(t.version), 'detail-version'),
   ));
 
+  // Agent start, runs and written-back results (FR-501, FR-511).
+  const agents = aiUI ? aiUI.taskSection(t) : null;
+  if (agents) pane.append(agents);
+
   if (detail.subtasks && detail.subtasks.length) {
     pane.append(h('h3', null, `子任务（${detail.subtasks.length}）`), h('ul', { class: 'subtasks', 'data-testid': 'detail-subtasks' },
       detail.subtasks.map((st) => h('li', null,
@@ -503,7 +510,8 @@ function renderDetail() {
         h('strong', null, actionLabel(e.action)),
         h('span', { class: 'muted' }, ` · ${actorLabel(e.actor)} · ${formatDateTime(e.created_at)}`)),
       e.action === 'create' ? null : h('ul', { class: 'changes' }, describeChanges(e.changes).map((c) =>
-        h('li', null, h('span', { class: 'field' }, c.label), `：${c.from} → ${c.to}`)))))));
+        h('li', null, h('span', { class: 'field' }, c.label),
+          e.action.startsWith('agent_') && c.from === '（空）' ? `：${c.to}` : `：${c.from} → ${c.to}`)))))));
 }
 
 const LIVE_TEXT = {
@@ -804,6 +812,8 @@ function isTyping(e) {
 
 function onKey(e) {
   if (document.querySelector('dialog[open]')) return;
+  // Inside the AI panel only Escape is a shortcut (it closes the panel).
+  if (e.target instanceof Element && e.target.closest('#ai-panel') && e.key !== 'Escape') return;
   if (isTyping(e)) {
     if (e.key === 'Escape') e.target.blur();
     return;
@@ -842,9 +852,12 @@ function onKey(e) {
     K: () => live && moveInOrder(t, -1),
     J: () => live && moveInOrder(t, 1),
     u: () => undo(),
+    i: () => aiUI && aiUI.toggle(),
+    g: () => live && aiUI && aiUI.startForTask(t.id),
     '?': () => $('#help-dialog').showModal(),
     Escape: () => {
-      if (store.get().selected.size) store.set({ selected: new Set() });
+      if (aiUI && aiUI.isOpen()) aiUI.close();
+      else if (store.get().selected.size) store.set({ selected: new Set() });
       else if (store.get().openId) openTask(null);
     },
   };
@@ -992,6 +1005,7 @@ function bind() {
 
 function onRemoteChange(ev) {
   scheduleRefresh();
+  if (aiUI) aiUI.onRemoteChange(ev);
   if (editor && editor.task && ev.task_id === editor.task.id && ev.task && ev.task.version > editor.version &&
       ev.task.version > editor.remoteVersion) {
     editor.remoteVersion = ev.task.version;
@@ -1020,6 +1034,13 @@ async function restoreDraft() {
 
 async function main() {
   bind();
+  aiUI = initAI({
+    toast,
+    refresh,
+    openTask,
+    taskById,
+    selectedIds: () => [...store.get().selected],
+  });
   store.subscribe(render);
   render();
   connectLive({
