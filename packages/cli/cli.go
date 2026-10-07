@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,9 @@ type Env struct {
 	Stderr io.Writer
 	Getenv func(string) string
 	Now    func() time.Time
+	// Ctx stops long-running commands (todo serve); nil means until
+	// SIGINT/SIGTERM.
+	Ctx context.Context
 }
 
 // OSEnv returns the real process environment.
@@ -89,6 +93,7 @@ func init() {
 		{"import", nil, "<file|-> [--replace]", "Import a JSON export", cmdImport},
 		{"backup", nil, "", "Write a database backup into the data directory", cmdBackup},
 		{"status", nil, "", "Show data directory, model configuration and runtime state", cmdStatus},
+		{"serve", []string{"web", "server"}, "[--port N] [--host 127.0.0.1] [--open]", "Start the local web service (REST API + live events, 127.0.0.1 only)", cmdServe},
 		{"tui", []string{"ui", "i"}, "[--no-mouse] [--no-color] [--keymap FILE]", "Interactive full-screen UI (keyboard + mouse); also `todo` with no arguments in a terminal", cmdTUI},
 		{"keys", []string{"keybindings"}, "[--init [--force]] [--keymap FILE]", "Show or initialise the interactive UI key bindings", cmdKeys},
 		{"completion", nil, "bash|zsh|fish", "Print a shell completion script", cmdCompletion},

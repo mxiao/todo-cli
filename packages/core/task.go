@@ -180,6 +180,30 @@ var (
 	ErrInvalidImportFile = errors.New("invalid_import_file")
 )
 
+// ConflictError reports a failed optimistic-lock check. It matches
+// ErrConflict with errors.Is.
+type ConflictError struct {
+	TaskID   string
+	Expected int64
+	Actual   int64
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("%v: task %s is at version %d, expected %d (it was changed elsewhere; reload and retry)",
+		ErrConflict, e.TaskID, e.Actual, e.Expected)
+}
+
+func (e *ConflictError) Unwrap() error { return ErrConflict }
+
+// checkVersion fails with a ConflictError when expected is set and differs
+// from the task's version.
+func checkVersion(t *Task, expected int64) error {
+	if expected != 0 && expected != t.Version {
+		return &ConflictError{TaskID: t.ID, Expected: expected, Actual: t.Version}
+	}
+	return nil
+}
+
 func newID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

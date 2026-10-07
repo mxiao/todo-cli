@@ -51,6 +51,9 @@ type Store struct {
 	dataDir string
 	actor   string
 	now     func() time.Time
+	// schema is the applied schema version; features of newer schemas are
+	// skipped when a test opens an older one.
+	schema int
 
 	// LastMigration describes what Open did to the schema, if anything.
 	LastMigration *MigrationReport
@@ -168,6 +171,7 @@ func (s *Store) migrate(target int) error {
 		return fmt.Errorf("%w: database schema v%d is newer than this build supports (v%d); upgrade todo-cli", ErrSchemaTooNew, cur, len(migrations))
 	}
 	if cur >= target {
+		s.schema = cur
 		return nil
 	}
 	report := &MigrationReport{From: cur, To: target}
@@ -197,6 +201,7 @@ func (s *Store) migrate(target int) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.schema = target
 	s.LastMigration = report
 	return nil
 }

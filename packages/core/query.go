@@ -191,8 +191,16 @@ func (s *Store) History(taskID string) ([]HistoryEntry, error) {
 }
 
 func (s *Store) history(where string, args ...any) ([]HistoryEntry, error) {
-	rows, err := s.db.Query(`SELECT id, task_id, coalesce(operation_id, 0), action, actor, changes, created_at
-		FROM task_history `+where+` ORDER BY id`, args...)
+	return s.historyLimit(where, 0, args...)
+}
+
+func (s *Store) historyLimit(where string, limit int, args ...any) ([]HistoryEntry, error) {
+	q := `SELECT id, task_id, coalesce(operation_id, 0), action, actor, changes, created_at
+		FROM task_history ` + where + ` ORDER BY id`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

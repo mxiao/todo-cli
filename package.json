@@ -2,7 +2,7 @@
   "name": "todo-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first todo manager: CLI and interactive TUI now, web/LLM/agents in later releases",
+  "description": "Local-first todo manager: CLI, interactive TUI and local web service/REST API; web UI/LLM/agents in later releases",
   "type": "module",
   "scripts": {
     "test": "go test ./... && npm run test:tui",

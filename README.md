@@ -11,10 +11,11 @@ cmd/todo/          `todo` binary entry point
 packages/core/     task model + SQLite store (single source of truth for every entry point)
 packages/cli/      non-interactive CLI (flags + --json), shell completion, `todo tui` launcher
 packages/tui/      interactive full-screen terminal UI (keyboard + mouse)
+packages/server/   local web service: REST API + live change events over the same store
 e2e/               node-pty end-to-end tests of the TUI
 ```
 
-Later releases add the local web server/UI, LLM features and agents
+Later releases add the web UI, LLM features and agents
 on top of `packages/core`. All of them share the same task IDs, fields and status rules.
 
 ### Stack decision
@@ -41,7 +42,8 @@ npm install && npm test           # go test ./... plus the node-pty TUI suite (e
 - One SQLite database: `~/.todo-cli/todo.db`. Override it with `--data-dir DIR` or `TODO_CLI_HOME`.
 - The data directory is `0700` and database/backup files are `0600`.
 - Writes are transactional: one command, including a batch, is one transaction. They are all-or-nothing.
-- Every task has a `version` (optimistic locking via `todo edit --if-version N`) and a full change history.
+- Every task has a `version` (optimistic locking via `todo edit --if-version N` or the API's `version`), a full
+  change history and a stored snapshot of every version.
 - Delete is a soft delete (`todo restore`, `todo list --deleted`).
 - `todo undo` reverts the most recent change (single edit, batch or import). Repeat it to step further back.
 - Schema migrations run automatically on open. Before an existing database is upgraded, a copy is written
@@ -91,6 +93,67 @@ Add `--json` to any command for machine-readable output on stdout. Errors go to 
 `TODO_CLI_MODEL`, `TODO_CLI_MODEL_BASE_URL` and `TODO_CLI_MODEL_API_KEY`. The key is never printed,
 and credentials or query strings in the base URL are stripped. Task management works without any
 model configured.
+
+## Local web service (`todo serve`)
+
+```bash
+todo serve                 # http://127.0.0.1:3210/ — the next free port if 3210 is taken
+todo serve --port 4000 --open
+todo serve --json          # {"url": "...", "port": ..., "data_dir": ..., "pid": ...}
+```
+
+The service reads and writes the same SQLite database as the CLI and the TUI (WAL mode, one source
+of truth), so a change made in any of them is visible in the others. It listens on loopback only
+(`--host` accepts `127.0.0.1`, `::1` or `localhost`; anything else is refused) and has no login. Requests
+whose `Host` is not a loopback name (DNS rebinding) and writes from another origin are rejected with
+`403`. `TODO_CLI_PORT` changes the default port. History records web changes with actor `web`.
+
+### REST API
+
+All responses are JSON (`Cache-Control: no-store`); errors are `{"error": {"code", "message"}}`.
+Task ids may be unique prefixes, as in the CLI.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/health` | status, schema version, current `revision` |
+| `GET /api/tasks` | list/search: `q`, `status` (csv or `all`), `priority`, `min_priority`, `tag`, `category`, `parent` (id or `none`), `due_before`, `due_after`, `overdue`, `has_due`, `include_archived`, `deleted=include\|only`, `sort=manual\|due\|priority\|created\|updated`, `reverse`, `limit` → `{tasks, count, revision}` |
+| `POST /api/tasks` | create (`title` required; `description`, `notes`, `due_at`, `priority`, `tags`, `category`, `parent_id`, `status`) → `201` |
+| `GET /api/tasks/{id}` | task + subtasks + history + open conflicts (`ETag` = version) |
+| `PATCH /api/tasks/{id}` | edit; **requires** the edited `version` (body or `If-Match`), else `428`. Fields: `title`, `description`, `notes`, `category`, `parent_id`, `due_at` (`null` clears), `priority`, `tags`, `add_tags`, `remove_tags`, `status` |
+| `POST /api/tasks/{id}/status` | `{"status": "done", "version"?}` — same history action as `todo done/start/reopen/archive` |
+| `DELETE /api/tasks/{id}` | soft delete (`?version=` optional) · `POST /api/tasks/{id}/restore` |
+| `POST /api/tasks/{id}/move` | manual order: `before` / `after` / `top` / `bottom` |
+| `POST /api/batch` | `{"action": "complete\|start\|reopen\|archive\|delete\|restore\|priority\|move", "ids": [...] or "items": [{"id","version"}], "priority"?, "category"?, "parent_id"?}` — atomic, one undo step |
+| `POST /api/undo` | undo the most recent change (any entry point) |
+| `GET /api/tasks/{id}/history` | change log with actor (`cli`, `tui`, `web`, …) |
+| `GET /api/tasks/{id}/versions[/{n}]` | every stored version of the task · `POST …/versions/{n}/revert` (needs current `version`) |
+| `GET /api/tasks/{id}/conflicts[?all=1]`, `GET /api/conflicts/{cid}` | rejected edits with a three-way field diff |
+| `POST /api/conflicts/{cid}/resolve` | `{"resolution": "mine"\|"theirs", "version"?}` |
+| `GET /api/events` | server-sent events (see below) |
+
+Status codes: `400 invalid_input|invalid_json|ambiguous_id`, `404 not_found`, `409 version_conflict|nothing_to_undo|conflict_resolved`,
+`410 task_deleted`, `413`, `415` (bodies must be `application/json`), `428 version_required`.
+
+### Versions and conflicts
+
+Every write bumps the task's server-generated `version`. The server keeps a full snapshot of each version.
+A write that carries an outdated version is rejected with `409` and never overwrites anything. The rejected
+edit is stored as a *conflict*. The response contains `conflict.base` (what you edited), `conflict.current`
+(what won), `conflict.yours`, `conflict.merged` (your edit applied on top of the current version) and
+`conflict.fields` (per field: base/current/yours, who changed it, whether both sides disagree). Resolve it
+later with `mine` (applies your edit, itself version-checked) or `theirs` (discards it). Any overwritten
+version can be brought back with `…/versions/{n}/revert`.
+
+### Live updates
+
+`GET /api/events` is a server-sent event stream: `ready` (`{"revision"}`), then one `task` event per change
+(`{revision, task_id, action, actor, changes, at, task}`), whichever process made it. The server polls the
+database every 200 ms, so CLI and TUI changes arrive well within 2 seconds. Event ids are revisions:
+a reconnecting `EventSource` sends `Last-Event-ID` (or use `?since=N`) and gets the missed changes replayed.
+If too many were missed, it gets a `resync` event, meaning reload the list. Clients should also refetch
+`GET /api/tasks` on focus or reload.
+
+Tests use Go's `net/http/httptest` against a real listener (the Go counterpart of Supertest).
 
 ## Interactive TUI
 

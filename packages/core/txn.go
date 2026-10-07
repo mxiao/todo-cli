@@ -187,7 +187,23 @@ func (x *txn) put(t *Task) error {
 			return err
 		}
 	}
-	return nil
+	return x.snapshotVersion(t)
+}
+
+// snapshotVersion keeps the full state of every task version so earlier
+// versions (e.g. one overwritten after a conflict) stay recoverable.
+func (x *txn) snapshotVersion(t *Task) error {
+	if x.s.schema < 3 {
+		return nil
+	}
+	b, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	_, err = x.tx.Exec(`INSERT INTO task_versions(task_id, version, snapshot, actor, created_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, version) DO UPDATE SET snapshot=excluded.snapshot, actor=excluded.actor, created_at=excluded.created_at`,
+		t.ID, t.Version, string(b), x.s.actor, fmtTime(x.now))
+	return err
 }
 
 // save validates and persists a changed task, bumping version and recording
