@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>todo-cli 任务</title>
+<link rel="stylesheet" href="/styles.css">
+<script type="module" src="/js/app.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <h1 class="brand">todo-cli</h1>
+  <form id="quick-add" class="quick-add" data-testid="quick-add" autocomplete="off">
+    <input id="quick-title" data-testid="quick-add-input" type="text" maxlength="500"
+      placeholder="新增任务，回车保存（支持 #标签 @分类 !high due:明天）" aria-label="新增任务标题">
+    <button type="submit" class="primary" data-testid="quick-add-submit">新增</button>
+    <button type="button" id="new-task" data-testid="new-task" title="打开完整表单 (N)">详细新增…</button>
+  </form>
+  <div class="topbar-actions">
+    <span id="live-status" class="live" data-testid="live-status" data-state="connecting" role="status">连接中…</span>
+    <button type="button" id="undo" data-testid="undo" title="撤销最近一次操作 (u)">撤销</button>
+    <button type="button" id="help" data-testid="help" title="快捷键 (?)" aria-label="快捷键帮助">?</button>
+  </div>
+</header>
+
+<section class="toolbar" aria-label="筛选与排序">
+  <nav id="status-tabs" class="tabs" data-testid="status-tabs" role="tablist"></nav>
+  <div class="filters">
+    <input id="search" data-testid="search" type="search" placeholder="搜索标题、描述、备注、标签 (/)" aria-label="搜索">
+    <select id="filter-priority" data-testid="filter-priority" aria-label="优先级筛选"></select>
+    <select id="filter-tag" data-testid="filter-tag" aria-label="标签筛选"></select>
+    <select id="filter-category" data-testid="filter-category" aria-label="分类筛选"></select>
+    <select id="filter-due" data-testid="filter-due" aria-label="截止时间筛选"></select>
+    <label class="sort-label">排序
+      <select id="sort" data-testid="sort" aria-label="排序方式"></select>
+    </label>
+    <button type="button" id="reverse" data-testid="sort-reverse" aria-pressed="false" title="反向排序">⇅ 反向</button>
+    <button type="button" id="clear-filters" data-testid="clear-filters">清除筛选</button>
+  </div>
+</section>
+
+<section id="batch-bar" class="batch-bar" data-testid="batch-bar" hidden aria-label="批量操作">
+  <strong id="batch-count" data-testid="batch-count"></strong>
+  <button type="button" data-batch="complete" data-testid="batch-complete">完成</button>
+  <button type="button" data-batch="start" data-testid="batch-start">开始</button>
+  <button type="button" data-batch="reopen" data-testid="batch-reopen">重新打开</button>
+  <button type="button" data-batch="archive" data-testid="batch-archive">归档</button>
+  <button type="button" data-batch="delete" data-testid="batch-delete" class="danger">删除</button>
+  <button type="button" data-batch="restore" data-testid="batch-restore">恢复</button>
+  <select id="batch-priority" data-testid="batch-priority" aria-label="批量修改优先级"></select>
+  <span class="batch-move">
+    <input id="batch-category" data-testid="batch-category" list="category-options" placeholder="分类（留空清除）" aria-label="移动到分类">
+    <button type="button" id="batch-move" data-testid="batch-move">移动到分类</button>
+  </span>
+  <button type="button" id="batch-clear" data-testid="batch-clear">取消选择</button>
+</section>
+
+<main class="layout">
+  <section class="list-pane" aria-label="任务列表">
+    <div class="list-head">
+      <label class="select-all"><input type="checkbox" id="select-all" data-testid="select-all"> 全选</label>
+      <span id="list-summary" data-testid="list-summary" class="muted"></span>
+    </div>
+    <div id="list-error" class="banner error" data-testid="list-error" hidden role="alert"></div>
+    <ul id="task-list" class="task-list" data-testid="task-list" role="listbox" aria-multiselectable="true" tabindex="0"></ul>
+    <p id="empty" class="empty" data-testid="empty" hidden></p>
+    <button type="button" id="show-more" class="show-more" data-testid="show-more" hidden></button>
+  </section>
+  <aside id="detail" class="detail" data-testid="detail" hidden aria-label="任务详情"></aside>
+</main>
+
+<div id="toasts" class="toasts" data-testid="toasts" aria-live="polite"></div>
+
+<datalist id="category-options"></datalist>
+<datalist id="tag-options"></datalist>
+<datalist id="parent-options"></datalist>
+
+<dialog id="editor" class="editor" data-testid="editor">
+  <form id="editor-form" method="dialog" autocomplete="off">
+    <h2 id="editor-title">新增任务</h2>
+    <div id="editor-banner" class="banner warn" data-testid="editor-banner" hidden></div>
+    <div id="editor-error" class="banner error" data-testid="editor-error" hidden role="alert"></div>
+    <label>标题 <span class="req">*</span>
+      <input name="title" data-testid="field-title" required maxlength="500">
+    </label>
+    <label>描述
+      <textarea name="description" data-testid="field-description" rows="3"></textarea>
+    </label>
+    <div class="row">
+      <label>状态
+        <select name="status" data-testid="field-status"></select>
+      </label>
+      <label>优先级
+        <select name="priority" data-testid="field-priority"></select>
+      </label>
+      <label>截止时间
+        <input name="due_at" data-testid="field-due" type="datetime-local">
+      </label>
+    </div>
+    <div class="row">
+      <label>标签
+        <input name="tags" data-testid="field-tags" placeholder="用逗号或空格分隔" list="tag-options">
+      </label>
+      <label>分类
+        <input name="category" data-testid="field-category" list="category-options">
+      </label>
+      <label>父任务
+        <input name="parent_id" data-testid="field-parent" list="parent-options" placeholder="任务编号（留空为顶层）">
+      </label>
+    </div>
+    <label>备注
+      <textarea name="notes" data-testid="field-notes" rows="3"></textarea>
+    </label>
+    <div class="dialog-actions">
+      <span class="muted hint">Ctrl/⌘ + Enter 保存 · Esc 取消</span>
+      <button type="button" id="editor-cancel" data-testid="editor-cancel">取消</button>
+      <button type="submit" id="editor-save" class="primary" data-testid="editor-save" value="save">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="conflict-dialog" class="conflict" data-testid="conflict-dialog">
+  <h2>修改冲突</h2>
+  <p>你编辑期间，这个任务已在其他地方（<span id="conflict-actor"></span>）被修改。你的修改尚未覆盖任何内容。</p>
+  <table class="diff">
+    <thead><tr><th>字段</th><th>编辑前</th><th>对方的版本</th><th>你的修改</th></tr></thead>
+    <tbody id="conflict-fields" data-testid="conflict-fields"></tbody>
+  </table>
+  <div class="dialog-actions">
+    <button type="button" id="conflict-later" data-testid="conflict-later">稍后处理</button>
+    <button type="button" id="conflict-theirs" data-testid="conflict-theirs">放弃我的修改</button>
+    <button type="button" id="conflict-mine" class="primary" data-testid="conflict-mine">应用我的修改</button>
+  </div>
+</dialog>
+
+<dialog id="help-dialog" class="help" data-testid="help-dialog">
+  <h2>快捷键</h2>
+  <table class="keys">
+    <tbody>
+      <tr><td><kbd>n</kbd></td><td>快速新增</td><td><kbd>N</kbd></td><td>完整表单新增</td></tr>
+      <tr><td><kbd>/</kbd></td><td>搜索</td><td><kbd>Esc</kbd></td><td>关闭详情 / 取消选择</td></tr>
+      <tr><td><kbd>j</kbd> <kbd>↓</kbd></td><td>下一项</td><td><kbd>k</kbd> <kbd>↑</kbd></td><td>上一项</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>打开详情</td><td><kbd>e</kbd></td><td>编辑</td></tr>
+      <tr><td><kbd>x</kbd></td><td>完成 / 重新打开</td><td><kbd>s</kbd></td><td>开始</td></tr>
+      <tr><td><kbd>A</kbd></td><td>归档</td><td><kbd>d</kbd> <kbd>Delete</kbd></td><td>删除</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>选中 / 取消选中（批量）</td><td><kbd>Ctrl/⌘</kbd>+<kbd>a</kbd></td><td>全选</td></tr>
+      <tr><td><kbd>+</kbd> <kbd>-</kbd></td><td>提高 / 降低优先级</td><td><kbd>K</kbd> <kbd>J</kbd></td><td>手动顺序上移 / 下移</td></tr>
+      <tr><td><kbd>u</kbd></td><td>撤销最近一次操作</td><td><kbd>?</kbd></td><td>显示本帮助</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">与命令行 <code>todo</code> 共用同一份本地数据；任何一端的修改都会实时出现在这里。</p>
+  <div class="dialog-actions"><button type="button" id="help-close" data-testid="help-close">关闭</button></div>
+</dialog>
+</body>
+</html>

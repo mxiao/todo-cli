@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	iofs "io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -17,6 +19,10 @@ import (
 
 // EnvPort overrides the default web service port.
 const EnvPort = "TODO_CLI_PORT"
+
+// EnvWebDir serves the web UI from a directory (e.g. apps/web) instead of
+// the copy embedded in the binary, for working on the page without rebuilds.
+const EnvWebDir = "TODO_CLI_WEB_DIR"
 
 // serveInfo is what `todo serve --json` prints once it is listening.
 type serveInfo struct {
@@ -54,6 +60,13 @@ func cmdServe(a *app, args []string) error {
 	if *port < 0 || *port > 65535 {
 		return usagef("--port %d is out of range", *port)
 	}
+	var assets iofs.FS
+	if dir := a.env.Getenv(EnvWebDir); dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, "index.html")); err != nil {
+			return usagef("%s=%q: no index.html there", EnvWebDir, dir)
+		}
+		assets = os.DirFS(dir)
+	}
 	if a.actor == "" {
 		a.actor = "web" // history records changes made through the web service as "web"
 	}
@@ -90,7 +103,7 @@ func cmdServe(a *app, args []string) error {
 		defer stop()
 	}
 	log := slog.New(slog.NewTextHandler(a.env.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	srv := server.New(s, server.Options{Logger: log, Version: Version})
+	srv := server.New(s, server.Options{Logger: log, Version: Version, Assets: assets})
 	return srv.Serve(ctx, ln)
 }
 

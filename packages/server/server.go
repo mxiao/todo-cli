@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	web "github.com/mxiao/todo-cli/apps/web"
 	"github.com/mxiao/todo-cli/packages/core"
 )
 
@@ -57,15 +59,20 @@ type Options struct {
 	Logger       *slog.Logger
 	// Version is reported by /api/health.
 	Version string
+	// Assets is the web UI served at "/"; nil means the copy embedded in
+	// the binary (apps/web). Point it at os.DirFS("apps/web") to work on the
+	// page without rebuilding.
+	Assets fs.FS
 }
 
 // Server serves the REST API and event stream for one store.
 type Server struct {
-	store *core.Store
-	opts  Options
-	log   *slog.Logger
-	mux   *http.ServeMux
-	hub   *hub
+	store  *core.Store
+	opts   Options
+	log    *slog.Logger
+	mux    *http.ServeMux
+	hub    *hub
+	static map[string]staticFile
 }
 
 // New builds a server over store and starts its change watcher; call Close
@@ -81,7 +88,15 @@ func New(store *core.Store, opts Options) *Server {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if opts.Assets == nil {
+		opts.Assets = web.Assets
+	}
 	s := &Server{store: store, opts: opts, log: log, mux: http.NewServeMux()}
+	static, err := loadStatic(opts.Assets)
+	if err != nil {
+		log.Error("load web assets; serving the API only", "err", err)
+	}
+	s.static = static
 	s.hub = newHub(store, opts.PollInterval, log)
 	s.routes()
 	return s

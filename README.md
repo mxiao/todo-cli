@@ -11,11 +11,12 @@ cmd/todo/          `todo` binary entry point
 packages/core/     task model + SQLite store (single source of truth for every entry point)
 packages/cli/      non-interactive CLI (flags + --json), shell completion, `todo tui` launcher
 packages/tui/      interactive full-screen terminal UI (keyboard + mouse)
-packages/server/   local web service: REST API + live change events over the same store
-e2e/               node-pty end-to-end tests of the TUI
+packages/server/   local web service: REST API + live change events over the same store, serves apps/web
+apps/web/          browser task manager (plain HTML/CSS/ES modules, embedded into the binary)
+e2e/               node-pty end-to-end tests of the TUI; e2e/web: Playwright tests of the web UI
 ```
 
-Later releases add the web UI, LLM features and agents
+Later releases add LLM features and agents
 on top of `packages/core`. All of them share the same task IDs, fields and status rules.
 
 ### Stack decision
@@ -31,7 +32,10 @@ the pure-Go `modernc.org/sqlite` driver, which needs no cgo and no runtime depen
 ```bash
 go build -o bin/todo ./cmd/todo   # or: npm run build
 go test ./...                     # Go unit tests + TUI tests on a real pseudo-terminal
-npm install && npm test           # go test ./... plus the node-pty TUI suite (e2e/)
+npm install && npm test           # go test ./..., web module unit tests and the node-pty TUI suite (e2e/)
+npx playwright install chromium   # once
+npm run test:e2e                  # Playwright: web UI against a real `todo serve` + CLI (Chromium)
+npm run test:e2e:all              # same on Chromium, Firefox and WebKit (Safari engine)
 ```
 
 `npm install` pulls `node-pty` (dev only) and restores the executable bit on its prebuilt macOS
@@ -108,6 +112,37 @@ of truth), so a change made in any of them is visible in the others. It listens 
 whose `Host` is not a loopback name (DNS rebinding) and writes from another origin are rejected with
 `403`. `TODO_CLI_PORT` changes the default port. History records web changes with actor `web`.
 
+### Web task manager
+
+Open the address `todo serve` prints (or `todo serve --open`). The page covers the same task operations
+as the CLI (FR-701):
+
+- **List** with status tabs (全部/待办/进行中/已完成/已归档/回收站), keyword search, filters for
+  priority, tag, category and due time (overdue, today, 7 days, with/without due), and sorting by manual
+  order, due time, priority, created or updated time (reversible). The view lives in the URL, so a
+  reload or bookmark shows the same list.
+- **Create** with the quick-add box (TUI syntax: `写周报 #work @office !high due:明天`) or the full form
+  (title, description, notes, status, priority, due time, tags, category, parent task).
+- **Detail** pane with all fields, subtasks and the full change history (who: 命令行/终端界面/网页).
+- **Edit**, complete/reopen, start, archive, delete and restore (recycle bin), priority `+`/`-`,
+  manual reordering.
+- **Batch**: select rows (checkbox, shift-click for a range, select all) and complete, start, reopen,
+  archive, delete/restore, set priority or move to a category in one atomic, undoable step.
+- **Undo**: every change shows a toast with 撤销; the 撤销 button and `u` undo the most recent change.
+- **Keyboard**: `n`/`N` new, `/` search, `j`/`k` move, `Enter` details, `e` edit, `x` done, `s` start,
+  `A` archive, `d` delete, `space` select, `K`/`J` reorder, `u` undo, `?` help.
+
+The page keeps no task data of its own: every action goes through the REST API into the same SQLite
+database the CLI uses, with the same history actions as the CLI command of the same name (FR-706),
+recorded with actor `web`. Changes from the CLI, the TUI or another tab arrive over `/api/events`
+within about a second; the page also reloads when it regains focus. Edits carry the task version: if
+the task changed meanwhile, a dialog shows base/theirs/yours per field and lets you apply your edit,
+discard it or decide later (the rejected edit is kept as a conflict). Unsaved form input survives a
+reload (it is kept in `localStorage` until saved or cancelled). The page is plain HTML, CSS and ES
+modules with no build step, embedded into the binary and served with a strict Content-Security-Policy;
+it supports current Safari, Chrome, Edge and Firefox. `TODO_CLI_WEB_DIR=apps/web todo serve` (or
+`npm run dev:web`) serves the files from disk while working on the page.
+
 ### REST API
 
 All responses are JSON (`Cache-Control: no-store`); errors are `{"error": {"code", "message"}}`.
@@ -116,6 +151,7 @@ Task ids may be unique prefixes, as in the CLI.
 | Method & path | Purpose |
 |---|---|
 | `GET /api/health` | status, schema version, current `revision` |
+| `GET /api/facets` | tags and categories in use, with task counts → `{tags: [{name, count}], categories: [...]}` |
 | `GET /api/tasks` | list/search: `q`, `status` (csv or `all`), `priority`, `min_priority`, `tag`, `category`, `parent` (id or `none`), `due_before`, `due_after`, `overdue`, `has_due`, `include_archived`, `deleted=include\|only`, `sort=manual\|due\|priority\|created\|updated`, `reverse`, `limit` → `{tasks, count, revision}` |
 | `POST /api/tasks` | create (`title` required; `description`, `notes`, `due_at`, `priority`, `tags`, `category`, `parent_id`, `status`) → `201` |
 | `GET /api/tasks/{id}` | task + subtasks + history + open conflicts (`ETag` = version) |
@@ -193,7 +229,7 @@ buttons are clickable. The keyboard cursor and the mouse selection are the same 
 inputs (new task, edit form) are never disturbed by clicks. Disable reporting with `--no-mouse` or
 `TODO_CLI_MOUSE=0`; every action stays reachable from the keyboard.
 
-Changes made elsewhere (another `todo` command, later the web UI) appear within about a second.
+Changes made elsewhere (another `todo` command, the web UI) appear within about a second.
 Editing a task that changed meanwhile reports a conflict and keeps your input; saving again
 overwrites deliberately. History records TUI changes with actor `tui`.
 
