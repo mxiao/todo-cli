@@ -2,10 +2,17 @@
   "name": "todo-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first todo manager: CLI now, TUI/web/LLM/agents in later releases",
+  "description": "Local-first todo manager: CLI and interactive TUI now, web/LLM/agents in later releases",
+  "type": "module",
   "scripts": {
-    "test": "go test ./...",
+    "test": "go test ./... && npm run test:tui",
+    "test:go": "go test ./...",
+    "test:tui": "npm run build && node --test e2e/tui.pty.test.mjs",
     "build": "go build -o bin/todo ./cmd/todo",
-    "lint": "gofmt -l . && go vet ./..."
+    "lint": "gofmt -l . && go vet ./...",
+    "postinstall": "node scripts/fix-node-pty.mjs"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

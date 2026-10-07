@@ -89,6 +89,9 @@ func init() {
 		{"import", nil, "<file|-> [--replace]", "Import a JSON export", cmdImport},
 		{"backup", nil, "", "Write a database backup into the data directory", cmdBackup},
 		{"status", nil, "", "Show data directory, model configuration and runtime state", cmdStatus},
+		{"tui", []string{"ui", "i"}, "[--no-mouse] [--no-color] [--keymap FILE]", "Interactive full-screen UI (keyboard + mouse); also `todo` with no arguments in a terminal", cmdTUI},
+		{"keys", []string{"keybindings"}, "[--init [--force]] [--keymap FILE]", "Show or initialise the interactive UI key bindings", cmdKeys},
+		{"completion", nil, "bash|zsh|fish", "Print a shell completion script", cmdCompletion},
 		{"version", nil, "", "Print version", cmdVersion},
 		{"help", nil, "[command]", "Show help", cmdHelp},
 	}
@@ -171,9 +174,14 @@ func (a *app) globalFlags(args []string) ([]string, error) {
 
 func (a *app) dispatch(args []string) error {
 	if len(args) == 0 {
+		if a.isTerminal() && !a.json {
+			return cmdTUI(a, nil)
+		}
 		return cmdHelp(a, nil)
 	}
 	switch args[0] {
+	case "__complete": // hidden: used by the shell completion scripts
+		return cmdComplete(a, args[1:])
 	case "-h", "--help":
 		return cmdHelp(a, args[1:])
 	case "-v", "--version":
@@ -181,7 +189,7 @@ func (a *app) dispatch(args []string) error {
 	}
 	c := findCommand(args[0])
 	if c == nil {
-		return usagef("unknown command %q (run `todo help`)", args[0])
+		return usagef("unknown command %q%s (run `todo help`)", args[0], suggestCommand(args[0]))
 	}
 	return c.run(a, args[1:])
 }

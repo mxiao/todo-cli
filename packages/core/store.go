@@ -125,6 +125,15 @@ func (s *Store) Actor() string { return s.actor }
 
 func (s *Store) clock() time.Time { return s.now().UTC() }
 
+// DataVersion returns a counter that changes whenever another connection
+// or process commits to the database. Long-running UIs poll it to notice
+// changes made elsewhere; the store's own writes do not change it.
+func (s *Store) DataVersion() (int64, error) {
+	var v int64
+	err := s.db.QueryRow(`PRAGMA data_version`).Scan(&v)
+	return v, err
+}
+
 // SchemaVersion returns the currently applied schema version.
 func (s *Store) SchemaVersion() (int, error) { return schemaVersion(s.db) }
 

@@ -723,3 +723,21 @@ func TestManyTasksStayFast(t *testing.T) {
 		t.Fatalf("filtered list over 10k tasks took %v (NFR-012: < 1s)", d)
 	}
 }
+
+func TestDataVersionTracksOtherWriters(t *testing.T) {
+	dir := t.TempDir()
+	ui := openDir(t, dir)
+	other := openDir(t, dir)
+	v0, err := ui.DataVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, ui, NewTask{Title: "own write"})
+	if v, _ := ui.DataVersion(); v != v0 {
+		t.Errorf("own writes must not change the data version (%d → %d)", v0, v)
+	}
+	mustCreate(t, other, NewTask{Title: "elsewhere"})
+	if v, _ := ui.DataVersion(); v == v0 {
+		t.Errorf("a commit by another connection must change the data version")
+	}
+}
