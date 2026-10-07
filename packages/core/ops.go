@@ -273,3 +273,33 @@ func (s *Store) UndoOperation(id int64) (*UndoResult, error) {
 	}
 	return res, tx.Commit()
 }
+
+// RecordEvent appends a history entry that does not change the task, such
+// as an agent run starting or a result being written back (FR-108). It
+// raises the revision, so live views see it like any other change.
+func (s *Store) RecordEvent(taskID, action string, changes map[string]Change) error {
+	if changes == nil {
+		changes = map[string]Change{}
+	}
+	b, err := json.Marshal(changes)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM tasks WHERE id = ?`, taskID).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: task %s", ErrNotFound, taskID)
+	}
+	if _, err := tx.Exec(`INSERT INTO task_history(task_id, operation_id, action, actor, changes, created_at) VALUES (?, NULL, ?, ?, ?, ?)`,
+		taskID, action, s.actor, string(b), fmtTime(s.clock())); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

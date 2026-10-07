@@ -40,9 +40,10 @@ type Service struct {
 	llm   *core.Store // same database, history actor "llm"
 	opts  Options
 
-	mu      sync.Mutex
-	keys    []string // known secrets, hidden from everything stored
-	keysSet bool
+	mu       sync.Mutex
+	keys     []string // known secrets, hidden from everything stored
+	keysSet  bool
+	launcher AgentLauncher
 }
 
 // Open prepares the llm tables in the store's database.

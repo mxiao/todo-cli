@@ -25,6 +25,7 @@ import (
 	"time"
 
 	web "github.com/mxiao/todo-cli/apps/web"
+	"github.com/mxiao/todo-cli/packages/agent"
 	"github.com/mxiao/todo-cli/packages/core"
 	"github.com/mxiao/todo-cli/packages/llm"
 	"github.com/mxiao/todo-cli/packages/prompt"
@@ -82,6 +83,9 @@ type Server struct {
 	llm     *llm.Service
 	prompts *prompt.Library
 	llmErr  string
+
+	agents     *agent.Manager
+	stopAgents context.CancelFunc
 }
 
 // New builds a server over store and starts its change watcher; call Close
@@ -108,12 +112,20 @@ func New(store *core.Store, opts Options) *Server {
 	s.static = static
 	s.hub = newHub(store, opts.PollInterval, log)
 	s.openLLM()
+	s.openAgents()
 	s.routes()
 	return s
 }
 
-// Close stops the change watcher and ends every open event stream.
-func (s *Server) Close() { s.hub.close() }
+// Close stops the change watcher, ends every open event stream and stops
+// the agent runs executing in this server (they end as cancelled).
+func (s *Server) Close() {
+	s.hub.close()
+	if s.agents != nil {
+		s.stopAgents()
+		s.agents.Wait()
+	}
+}
 
 // ServeHTTP applies the local-access guard and dispatches to the routes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

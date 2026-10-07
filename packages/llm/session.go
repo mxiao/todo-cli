@@ -160,6 +160,8 @@ type Command struct {
 	// review before it starts (FR-506).
 	Prompt string         `json:"prompt,omitempty"`
 	Result *CommandResult `json:"result,omitempty"`
+	// RunID is the agent run started for this item (packages/agent).
+	RunID string `json:"run_id,omitempty"`
 }
 
 // Diff is one field before and after.

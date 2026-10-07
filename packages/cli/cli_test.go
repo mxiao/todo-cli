@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ type harness struct {
 	dir   string
 	env   map[string]string
 	stdin string
-	tick  int
+	tick  atomic.Int64 // agent runs read the clock from several goroutines
 	// hooks inject mock models; the keychain is always in memory.
 	hooks LLMHooks
 }
@@ -38,8 +39,7 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 		Stdin: strings.NewReader(h.stdin), Stdout: &out, Stderr: &errb,
 		Getenv: func(k string) string { return h.env[k] },
 		Now: func() time.Time {
-			h.tick++
-			return now.Add(time.Duration(h.tick) * time.Millisecond)
+			return now.Add(time.Duration(h.tick.Add(1)) * time.Millisecond)
 		},
 		LLM: h.hooks,
 	}

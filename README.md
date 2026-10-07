@@ -14,11 +14,12 @@ packages/tui/      interactive full-screen terminal UI (keyboard + mouse)
 packages/server/   local web service: REST API + live change events over the same store, serves apps/web
 packages/llm/      OpenAI-compatible model client, permission policy, NL intake, decisions, self-optimisation
 packages/prompt/   prompt summaries → versioned, reusable templates with {{variables}}
+packages/agent/    agent runs: adapters (command line, HTTP, prompt agent, registered), logs, control, result write-back
 apps/web/          browser task manager (plain HTML/CSS/ES modules, embedded into the binary)
 e2e/               node-pty end-to-end tests of the TUI; e2e/web: Playwright tests of the web UI
 ```
 
-Model features (`packages/llm`, `packages/prompt`) and later the agents build
+Model features (`packages/llm`, `packages/prompt`) and the agents (`packages/agent`) build
 on top of `packages/core`. All of them share the same task IDs, fields and status rules.
 
 ### Stack decision
@@ -170,6 +171,95 @@ todo prompt render 周报分析 --var 产品=FlowOS
 todo prompt task 周报分析 --var 产品=FlowOS   # agent task whose description is the final prompt
 ```
 
+### Agents (`todo agent`)
+
+An agent is any program, service or model prompt that works on a task. Agents are configured once and
+started from a task (`todo agent run`, `POST /api/tasks/{id}/agent-runs`) or from a model decision
+(an accepted `agent` item of `todo ai decide` starts a run). `--agent auto` lets the model choose
+from the agents' descriptions; without a usable model the routing rules of the assistant
+configuration (`tag:NAME` or a keyword) decide, then the only configured agent.
+
+```sh
+# generic command-line adapter: program + args, run without a shell
+todo agent add coder --desc 写代码 --dir ~/src/app --env GITHUB_TOKEN --timeout 20m \
+  --success-codes 0 --input json-stdin --output jsonl --max-retries 1 -- my-agent --task {{task_id}}
+todo agent add claude --input prompt-stdin --output text -- claude -p      # another local agent
+todo agent add ci --adapter http --url https://ci.example/run --header-env Authorization=CI_TOKEN
+todo agent add writer --adapter llm --desc 写文档                          # prompt agent (model profile)
+todo agent list
+
+todo agent run 1a2b --agent coder [--context …] [--constraint …] [--format …] [--complete]
+todo agent run 1a2b --agent auto --template 周报分析 --var 产品=FlowOS      # template → instructions
+todo agent run 1a2b --dry-run              # show the chosen agent and the final prompt only
+todo agent run 1a2b --detach               # background worker; follow with logs --follow
+todo agent runs [--task 1a2b] [--status running,failed]
+todo agent show r3f2 | logs r3f2 [--follow] [--kind output,command,error] | prompt r3f2
+todo agent pause r3f2 | resume r3f2 | cancel r3f2 | retry r3f2 [--context 改用 --fast]
+todo agent confirm r3f2 | reject r3f2      # agents added with --confirm wait for this
+todo agent results 1a2b                    # every result with source agent, time and version
+todo agent writeback 1a2b '{"result_type":"commit","repo":"app","branch":"main","commit":"89abcdef"}'
+```
+
+**Run states** (FR-502): `queued` 排队中, `waiting_confirmation` 等待确认, `running` 运行中, `paused`
+已暂停, `waiting_retry` 等待重试, `succeeded` 成功, `partial` 部分成功, `failed` 失败, `cancelled` 已取消,
+`unknown` 结果未知. Every run shows its start and end time and its duration without pauses; each retry is a
+new attempt and earlier attempts keep their status, exit code and log. Exit codes in `success_codes`
+(default 0) mean success unless the agent reports otherwise; a failure that already wrote results back is
+`partial`; an attempt killed by its timeout, or whose executing process died, is `unknown` and is never
+retried automatically. Automatic retries (`--max-retries`) only follow plain failures without results.
+A run never marks its task done unless it succeeded and was started with `--complete` or the agent wrote a
+`task_status` result with `"local_status":"done"`. The first attempt moves a `todo` task to in progress.
+
+**Control.** Runs are controlled through the database, so `pause`/`resume`/`cancel` work from any
+terminal or the web page whichever process executes the run. The command-line adapter starts the agent
+in its own process group: pause/resume send SIGSTOP/SIGCONT, cancel sends SIGTERM and SIGKILL after a
+grace period. At most 4 attempts run at once (`TODO_CLI_AGENT_CONCURRENCY`); more runs wait queued.
+
+**Protocol `todo-agent/v1`.** The agent receives a JSON document (`--input json-stdin`, the default, or
+`json-arg`; `prompt-stdin`/`prompt-arg` pass only the final prompt; the file is also in
+`$TODO_AGENT_INPUT_FILE`): `protocol`, `run_id`, `attempt`, `task` (id, title, description, notes,
+status, priority, tags, category, due), `context` (parent, dependencies, subtasks, `previous_results`,
+template instructions, user context), `constraints`, `output_format`, `idempotency_key` and `prompt` — the
+final prompt combining all of it, shown by `todo agent prompt` before and after the start (FR-506).
+Arguments may use `{{prompt}}`, `{{input}}`, `{{input_file}}`, `{{task_id}}`, `{{run_id}}`,
+`{{attempt}}`, `{{workdir}}`. Standard output is JSON Lines (other lines are kept as plain output):
+
+```json
+{"type":"progress","stage":"build","percent":40,"message":"…"}
+{"type":"log","message":"…"}   {"type":"command","argv":["git","commit"],"exit_code":0}
+{"type":"error","message":"…","retryable":false}
+{"type":"result","result_type":"text","text":"…","summary":"…"}
+{"type":"result","result_type":"file","path":"out/report.md","summary":"…"}
+{"type":"result","result_type":"commit","repo":"…","branch":"main","commit":"<hash>","message":"…"}
+{"type":"result","result_type":"command_output","argv":["make","test"],"exit_code":0,"stdout":"…"}
+{"type":"result","result_type":"data","data":{…}}
+{"type":"result","result_type":"task_status","status":"Resolved","url":"…","local_status":"done"}
+{"type":"status","status":"succeeded|partial|failed","message":"…"}
+```
+
+`--output json` reads one document `{status, message, results, events}` at the end, `--output text`
+turns all of stdout into one text result. The HTTP adapter posts the same JSON input (with
+`Idempotency-Key: <task id>:<run id>`, identical on every attempt) and reads either
+`application/x-ndjson` lines or one JSON document; 2xx is exit code 0, other statuses are the exit code.
+Other applications are connected by registering an adapter in Go (`agent.Register("name", factory)`)
+and adding an agent with `--adapter name --option key=value`; an unknown adapter or agent is reported
+as not available, never as success.
+
+**Results** (FR-508/509/511) are stored per task with their source agent, run, attempt and time, and
+appear in the task history (`agent_run`, `agent_result`, `agent_succeeded`/`agent_failed`/…, actor
+`agent/<name>`). The idempotency key is `task id:run id:result type` (plus the result's own `key` when a
+run writes several results of one type). Results are append-only: the same content again is recognised
+and not stored twice, different content under the same key becomes a new version and the earlier versions
+stay. File results record path, size and SHA-256 (and whether they lie outside the working directory),
+commit results repository, branch and hash.
+
+**Safety.** Agents run with the current user's permissions only: commands containing `sudo`, `su`,
+`doas` … are refused, commands run without a shell, and the environment is reduced to `PATH`, `HOME`,
+`USER`, locale/terminal variables, the agent's `--env` whitelist and `TODO_AGENT_*` (model keys are never
+passed, not even when whitelisted). Prompts, inputs, logs and results are redacted like the model
+features (keys, tokens, passwords, `Bearer …`, the values of whitelisted `*TOKEN*`/`*KEY*` variables and
+HTTP header tokens).
+
 ## Local web service (`todo serve`)
 
 ```bash
@@ -252,6 +342,17 @@ Model and prompt endpoints (keys are never accepted or returned): `GET /api/llm/
 `POST /api/prompts/{pid}/rollback|copy|render|task`, `GET /api/prompts/{pid}/export?format=md|txt|json`.
 Model failures answer `503` with `{code, message, hint, retryable, profiles}`; session state errors `409 invalid_state`;
 missing template variables `400 missing_variables`.
+
+Agent endpoints: `GET /api/agents` (agents and adapters), `PUT|DELETE /api/agents/{name}`,
+`POST /api/tasks/{id}/agent-runs` `{agent ("auto"), context?, constraints?, output_format?, template?, vars?,
+complete_on_success?, max_retries?, dry_run?}` → `201` (runs in the background of the server),
+`GET /api/agent-runs[?task=&status=a,b&limit=]`, `GET /api/agent-runs/{rid}` (attempts, results, duration),
+`GET /api/agent-runs/{rid}/events?after=<id>&attempt=&kind=` (log for live views, with `done`),
+`GET /api/agent-runs/{rid}/prompt`, `POST /api/agent-runs/{rid}/pause|resume|cancel|retry|confirm|reject`
+(`retry` takes `{context?}`), `GET /api/tasks/{id}/results`, and `POST /api/tasks/{id}/results`
+`{result_type, …, run_id?, source?}` for external write-back (`201`, or `200` with `duplicate: true` for a
+result already stored). A run state that does not allow the action answers `409 invalid_state`; an
+unknown agent `404`. Stopping the server cancels the runs it executes.
 
 Status codes: `400 invalid_input|invalid_json|ambiguous_id`, `404 not_found`, `409 version_conflict|nothing_to_undo|conflict_resolved`,
 `410 task_deleted`, `413`, `415` (bodies must be `application/json`), `428 version_required`.

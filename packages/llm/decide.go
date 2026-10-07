@@ -270,6 +270,13 @@ func (s *Service) modelDecision(ctx context.Context, c Client, r *Resolved, sess
 					it.Command.Dir = s.commandDir(st)
 				}
 				it.Command.Prompt = s.agentPrompt(&it)
+				if l := s.agentLauncher(); l != nil {
+					if p, err := l.PreviewAgentPrompt(ctx, AgentLaunch{SessionID: sess.ID, Item: it.N, TaskID: id, Agent: agent.Name, Reason: it.Reason}); err == nil {
+						it.Command.Prompt = p
+					} else {
+						sess.Warnings = append(sess.Warnings, fmt.Sprintf("智能体 %s 的提示词预览失败：%v", agent.Name, err))
+					}
+				}
 				it.Diff = []Diff{{Field: "agent", After: agent.Name + "：" + strings.Join(agent.Command, " ")}}
 			}
 		default:

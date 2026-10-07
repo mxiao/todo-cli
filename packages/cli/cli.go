@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mxiao/todo-cli/packages/agent"
 	"github.com/mxiao/todo-cli/packages/core"
 	"github.com/mxiao/todo-cli/packages/llm"
 	"github.com/mxiao/todo-cli/packages/prompt"
@@ -58,12 +59,14 @@ func (e usageError) Error() string { return e.msg }
 func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(format, a...)} }
 
 type app struct {
-	env     Env
-	json    bool
-	dataDir string
-	actor   string
-	store   *core.Store
-	llmSvc  *llm.Service
+	env      Env
+	json     bool
+	dataDir  string
+	actor    string
+	store    *core.Store
+	llmSvc   *llm.Service
+	agentMgr *agent.Manager
+	agentErr error
 }
 
 type command struct {
@@ -99,6 +102,7 @@ func init() {
 		{"backup", nil, "", "Write a database backup into the data directory", cmdBackup},
 		{"ai", nil, "<add|answer|decide|apply|reject|undo|edit|optimize|config|…>", "Create tasks from natural language, get decision support, review model changes", cmdAI},
 		{"llm", []string{"model"}, "<status|test|set|use|set-key|mode|confirm|agent|…>", "Configure the model service, credentials, permission mode and agents", cmdLLM},
+		{"agent", []string{"agents"}, "<list|add|run|runs|show|logs|prompt|pause|resume|cancel|retry|confirm|results|writeback|…>", "Run agents on tasks, follow their logs, control them and see the results they wrote back", cmdAgent},
 		{"prompt", []string{"prompts"}, "<summarize|list|show|edit|rollback|copy|export|render|task|…>", "Summarise long prompts into reusable, versioned templates", cmdPrompt},
 		{"status", nil, "", "Show data directory, model configuration and runtime state", cmdStatus},
 		{"serve", []string{"web", "server"}, "[--port N] [--host 127.0.0.1] [--open]", "Start the local web service (REST API + live events, 127.0.0.1 only)", cmdServe},

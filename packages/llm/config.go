@@ -119,13 +119,50 @@ type Profile struct {
 	MaxRetries *int `json:"max_retries,omitempty"`
 }
 
-// AgentProfile is a command-line agent the model may start (FR-603). The
-// task prompt is passed on standard input.
+// AgentProfile is an agent the user or the model may start (FR-505,
+// FR-510). Packages/agent runs it through the adapter named in Adapter:
+// "cli" (default) runs Command without a shell, "http" calls URL, "llm"
+// sends the final prompt to a model profile, and any other name is an
+// adapter registered with packages/agent.
 type AgentProfile struct {
 	Name        string   `json:"name"`
-	Command     []string `json:"command"`
+	Command     []string `json:"command,omitempty"`
 	Dir         string   `json:"dir,omitempty"`
 	Description string   `json:"description,omitempty"`
+	Adapter     string   `json:"adapter,omitempty"`
+	// Env lists the environment variables passed through to the agent; the
+	// rest of the environment (and always the model keys) is withheld.
+	Env            []string `json:"env,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	// SuccessCodes are the exit codes that mean success (default 0).
+	SuccessCodes []int `json:"success_codes,omitempty"`
+	// Input is how the context reaches the agent: json-stdin (default),
+	// json-arg, prompt-stdin, prompt-arg or none.
+	Input string `json:"input,omitempty"`
+	// Output is how stdout is parsed: jsonl (default), json or text.
+	Output            string   `json:"output,omitempty"`
+	MaxRetries        int      `json:"max_retries,omitempty"`
+	RetryDelaySeconds int      `json:"retry_delay_seconds,omitempty"`
+	Confirm           bool     `json:"confirm,omitempty"`
+	Constraints       []string `json:"constraints,omitempty"`
+	// URL, Method and HeaderEnv configure the http adapter. HeaderEnv maps
+	// a header to the environment variable holding its value, so tokens
+	// never enter the settings file.
+	URL       string            `json:"url,omitempty"`
+	Method    string            `json:"method,omitempty"`
+	HeaderEnv map[string]string `json:"header_env,omitempty"`
+	// Profile is the model profile of the llm adapter ("" = active).
+	Profile string `json:"profile,omitempty"`
+	// Options are free-form settings of registered adapters.
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// AdapterName is the adapter kind; empty means cli.
+func (a *AgentProfile) AdapterName() string {
+	if a.Adapter == "" {
+		return "cli"
+	}
+	return a.Adapter
 }
 
 // Settings is the user's model configuration (data dir/llm.json).
@@ -235,9 +272,24 @@ func (s *Settings) Validate() error {
 			return fmt.Errorf("%w: unknown task field %q (allowed: %s)", ErrInvalid, f, strings.Join(SendableFields, ", "))
 		}
 	}
+	agents := map[string]bool{}
 	for _, a := range s.Agents {
-		if a.Name == "" || len(a.Command) == 0 {
-			return fmt.Errorf("%w: an agent needs a name and a command", ErrInvalid)
+		if strings.TrimSpace(a.Name) == "" {
+			return fmt.Errorf("%w: an agent needs a name", ErrInvalid)
+		}
+		if agents[strings.ToLower(a.Name)] {
+			return fmt.Errorf("%w: duplicate agent %q", ErrInvalid, a.Name)
+		}
+		agents[strings.ToLower(a.Name)] = true
+		switch a.AdapterName() {
+		case "cli":
+			if len(a.Command) == 0 || strings.TrimSpace(a.Command[0]) == "" {
+				return fmt.Errorf("%w: agent %q needs a command", ErrInvalid, a.Name)
+			}
+		case "http":
+			if a.URL == "" {
+				return fmt.Errorf("%w: agent %q needs a url", ErrInvalid, a.Name)
+			}
 		}
 	}
 	return nil
