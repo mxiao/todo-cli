@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"net/url"
 	"os"
 	"os/user"
 	"runtime"
@@ -9,15 +8,16 @@ import (
 	"strings"
 
 	"github.com/mxiao/todo-cli/packages/core"
+	"github.com/mxiao/todo-cli/packages/llm"
 )
 
-// Model configuration is read from the environment so that credentials never
-// land in the task database (FR-601, FR-607).
+// Environment variables that configure the model (see packages/llm);
+// credentials never land in the task database (FR-601, FR-607).
 const (
-	EnvModelProvider = "TODO_CLI_MODEL_PROVIDER"
-	EnvModelName     = "TODO_CLI_MODEL"
-	EnvModelBaseURL  = "TODO_CLI_MODEL_BASE_URL"
-	EnvModelAPIKey   = "TODO_CLI_MODEL_API_KEY"
+	EnvModelProvider = llm.EnvProvider
+	EnvModelName     = llm.EnvModel
+	EnvModelBaseURL  = llm.EnvBaseURL
+	EnvModelAPIKey   = llm.EnvAPIKey
 )
 
 // StatusReport is the `todo status` output (FR-001).
@@ -46,14 +46,19 @@ type BackupStatus struct {
 }
 
 type ModelStatus struct {
-	// Status is "configured" when provider and model are set, otherwise
-	// "not_configured"; task management works either way (FR-606).
-	Status    string `json:"status"`
-	Source    string `json:"source"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
-	BaseURL   string `json:"base_url,omitempty"`
-	APIKeySet bool   `json:"api_key_set"`
+	// Status is "configured" when the active profile has a model, an
+	// endpoint and a key, otherwise "not_configured"; task management works
+	// either way (FR-606).
+	Status    string   `json:"status"`
+	Source    string   `json:"source"`
+	Profile   string   `json:"profile,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	BaseURL   string   `json:"base_url,omitempty"`
+	APIKeySet bool     `json:"api_key_set"`
+	KeySource string   `json:"key_source,omitempty"`
+	Mode      llm.Mode `json:"mode,omitempty"`
+	Problem   string   `json:"problem,omitempty"`
 }
 
 type RuntimeStatus struct {
@@ -64,34 +69,35 @@ type RuntimeStatus struct {
 	User      string `json:"user,omitempty"`
 }
 
+// modelStatus resolves the active model profile without touching the
+// database; the key itself is never reported.
 func (a *app) modelStatus() ModelStatus {
-	m := ModelStatus{
-		Source:    "env",
-		Provider:  a.env.Getenv(EnvModelProvider),
-		Model:     a.env.Getenv(EnvModelName),
-		BaseURL:   redactURL(a.env.Getenv(EnvModelBaseURL)),
-		APIKeySet: a.env.Getenv(EnvModelAPIKey) != "",
+	m := ModelStatus{Status: "not_configured"}
+	dir, err := a.resolveDataDir()
+	if err != nil {
+		m.Problem = err.Error()
+		return m
 	}
-	m.Status = "not_configured"
-	if m.Provider != "" && m.Model != "" {
-		m.Status = "configured"
+	st, err := llm.LoadSettings(dir)
+	if err != nil {
+		m.Problem = err.Error()
+		return m
 	}
+	m.Mode = st.Mode
+	if v := a.env.Getenv(llm.EnvMode); v != "" {
+		if mode, err := llm.ParseMode(v); err == nil {
+			m.Mode = mode
+		}
+	}
+	r, err := llm.Resolve(st, "", a.env.Getenv, a.secretStore())
+	if err != nil {
+		m.Problem = err.Error()
+		return m
+	}
+	p := r.Public()
+	m.Status, m.Source, m.Profile, m.Provider, m.Model = p.Status, p.Source, p.Profile, p.Provider, p.Model
+	m.BaseURL, m.APIKeySet, m.KeySource, m.Problem = p.BaseURL, p.APIKeySet, p.KeySource, p.Problem
 	return m
-}
-
-// redactURL drops credentials and query strings, which may carry keys.
-func redactURL(s string) string {
-	if s == "" {
-		return ""
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" {
-		return "[unparseable]"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
 }
 
 func cmdStatus(a *app, args []string) error {
@@ -185,19 +191,24 @@ func (a *app) printStatus(r *StatusReport) {
 	}
 	m := r.Model
 	a.printf("model:       %s", m.Status)
-	if m.Status == "configured" {
+	if m.Model != "" {
 		a.printf(" (%s/%s", m.Provider, m.Model)
 		if m.BaseURL != "" {
 			a.printf(" @ %s", m.BaseURL)
 		}
-		a.printf(")")
-	} else {
-		a.printf(" (set %s and %s)", EnvModelProvider, EnvModelName)
+		a.printf(", profile %s)", m.Profile)
 	}
 	key := "missing"
 	if m.APIKeySet {
-		key = "set"
+		key = "set (" + m.KeySource + ")"
 	}
-	a.printf(", api key %s\n", key)
+	a.printf(", api key %s", key)
+	if m.Mode != "" {
+		a.printf(", mode %s", m.Mode)
+	}
+	a.printf("\n")
+	if m.Problem != "" {
+		a.printf("             %s; task management works without a model\n", m.Problem)
+	}
 	a.printf("runtime:     %s/%s, %s, pid %d\n", r.Runtime.OS, r.Runtime.Arch, r.Runtime.GoVersion, r.Runtime.PID)
 }

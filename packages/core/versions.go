@@ -96,6 +96,9 @@ func scanVersion(r scanner) (*TaskVersion, error) {
 	if v.Task.Tags == nil {
 		v.Task.Tags = []string{}
 	}
+	if v.Task.DependsOn == nil {
+		v.Task.DependsOn = []string{}
+	}
 	return &v, nil
 }
 
@@ -223,6 +226,7 @@ func FieldValues(t *Task) map[string]any {
 		"title": strVal(t.Title), "description": strVal(t.Description), "notes": strVal(t.Notes),
 		"category": strVal(t.Category), "parent_id": strVal(t.ParentID), "due_at": timeVal(t.DueAt),
 		"priority": t.Priority.String(), "status": strVal(string(t.Status)), "tags": nilIfEmpty(t.Tags),
+		"depends_on": nilIfEmpty(t.DependsOn),
 		"deleted_at": timeVal(t.DeletedAt),
 	}
 }
@@ -241,6 +245,9 @@ func (s *Store) Revert(id string, version, expected int64) (*Task, error) {
 		}
 		t.Title, t.Description, t.Notes, t.Category, t.ParentID = old.Title, old.Description, old.Notes, old.Category, old.ParentID
 		t.DueAt, t.Priority, t.Tags = old.DueAt, old.Priority, slices.Clone(old.Tags)
+		if old.DependsOn != nil {
+			t.DependsOn = slices.Clone(old.DependsOn)
+		}
 		applyStatus(t, old.Status, x.now)
 		return nil
 	})

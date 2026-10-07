@@ -29,7 +29,7 @@ func (s *Store) Create(in NewTask) (*Task, error) {
 		}
 		t := &Task{
 			ID: newID(), Title: in.Title, Description: in.Description, DueAt: in.DueAt, Priority: in.Priority,
-			Tags: in.Tags, Category: in.Category, ParentID: in.ParentID, Notes: in.Notes, Status: in.Status,
+			Tags: in.Tags, Category: in.Category, ParentID: in.ParentID, DependsOn: in.DependsOn, Notes: in.Notes, Status: in.Status,
 			Position: pos, CreatedAt: x.now, Version: 1,
 		}
 		if t.Status == "" {
@@ -54,7 +54,7 @@ func applyStatusStamps(t *Task, now time.Time) {
 
 // Get returns a task by full ID, including soft-deleted tasks.
 func (s *Store) Get(id string) (*Task, error) {
-	t, err := scanTask(s.db.QueryRow(`SELECT `+taskColumns+` FROM tasks t WHERE t.id = ?`, id))
+	t, err := scanTask(s.db.QueryRow(`SELECT `+s.taskColumns()+` FROM tasks t WHERE t.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: task %s", ErrNotFound, id)
 	}
@@ -136,6 +136,9 @@ func ApplyPatch(t *Task, p TaskPatch, now time.Time) error {
 	t.Tags = NormalizeTags(append(t.Tags, p.AddTags...))
 	if rm := NormalizeTags(p.RemoveTags); len(rm) > 0 {
 		t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool { return slices.Contains(rm, tag) })
+	}
+	if p.DependsOn != nil {
+		t.DependsOn = normalizeIDs(*p.DependsOn)
 	}
 	if p.Status != nil {
 		if !p.Status.valid() {

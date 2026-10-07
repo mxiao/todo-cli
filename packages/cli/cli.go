@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/mxiao/todo-cli/packages/core"
+	"github.com/mxiao/todo-cli/packages/llm"
+	"github.com/mxiao/todo-cli/packages/prompt"
 )
 
 // Version is the todo-cli release version.
@@ -31,6 +33,8 @@ type Env struct {
 	// Ctx stops long-running commands (todo serve); nil means until
 	// SIGINT/SIGTERM.
 	Ctx context.Context
+	// LLM replaces the model plumbing (mock models in tests).
+	LLM LLMHooks
 }
 
 // OSEnv returns the real process environment.
@@ -59,6 +63,7 @@ type app struct {
 	dataDir string
 	actor   string
 	store   *core.Store
+	llmSvc  *llm.Service
 }
 
 type command struct {
@@ -92,6 +97,9 @@ func init() {
 		{"export", nil, "[-o file]", "Export all data as JSON", cmdExport},
 		{"import", nil, "<file|-> [--replace]", "Import a JSON export", cmdImport},
 		{"backup", nil, "", "Write a database backup into the data directory", cmdBackup},
+		{"ai", nil, "<add|answer|decide|apply|reject|undo|edit|optimize|config|…>", "Create tasks from natural language, get decision support, review model changes", cmdAI},
+		{"llm", []string{"model"}, "<status|test|set|use|set-key|mode|confirm|agent|…>", "Configure the model service, credentials, permission mode and agents", cmdLLM},
+		{"prompt", []string{"prompts"}, "<summarize|list|show|edit|rollback|copy|export|render|task|…>", "Summarise long prompts into reusable, versioned templates", cmdPrompt},
 		{"status", nil, "", "Show data directory, model configuration and runtime state", cmdStatus},
 		{"serve", []string{"web", "server"}, "[--port N] [--host 127.0.0.1] [--open]", "Start the local web service (REST API + live events, 127.0.0.1 only)", cmdServe},
 		{"tui", []string{"ui", "i"}, "[--no-mouse] [--no-color] [--keymap FILE]", "Interactive full-screen UI (keyboard + mouse); also `todo` with no arguments in a terminal", cmdTUI},
@@ -280,6 +288,14 @@ func errorCode(err error) (string, int) {
 	case errors.Is(err, core.ErrConflict):
 		return "version_conflict", ExitConflict
 	}
+	if e, ok := llm.AsError(err); ok {
+		return e.Kind, ExitError
+	}
+	for _, e := range []error{llm.ErrState, llm.ErrForbidden, llm.ErrInvalid, prompt.ErrInvalid} {
+		if errors.Is(err, e) {
+			return e.Error(), ExitError
+		}
+	}
 	for _, e := range []error{core.ErrAmbiguousID, core.ErrInvalid, core.ErrDeleted, core.ErrNothingToUndo,
 		core.ErrSchemaTooNew, core.ErrInvalidImportFile} {
 		if errors.Is(err, e) {
@@ -294,9 +310,21 @@ func (a *app) fail(err error) int {
 	if a.json {
 		enc := json.NewEncoder(a.env.Stderr)
 		enc.SetEscapeHTML(false)
-		_ = enc.Encode(map[string]any{"error": map[string]string{"code": code, "message": err.Error()}})
+		body := map[string]any{"code": code, "message": err.Error()}
+		if e, ok := llm.AsError(err); ok {
+			body["retryable"], body["profiles"], body["hint"] = e.Retryable, e.Profiles, e.Hint
+		}
+		_ = enc.Encode(map[string]any{"error": body})
 	} else {
 		fmt.Fprintf(a.env.Stderr, "todo: %v\n", err)
+		if e, ok := llm.AsError(err); ok {
+			if e.Retryable {
+				fmt.Fprintln(a.env.Stderr, "可以重试该命令。")
+			}
+			if len(e.Profiles) > 0 {
+				fmt.Fprintf(a.env.Stderr, "可切换模型配置：%s（todo llm use <配置名>）\n", strings.Join(e.Profiles, ", "))
+			}
+		}
 		if exit == ExitUsage {
 			fmt.Fprintln(a.env.Stderr, "run `todo help` for usage")
 		}

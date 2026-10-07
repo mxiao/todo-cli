@@ -42,18 +42,27 @@ func parseTimePtr(ns sql.NullString) (*time.Time, error) {
 
 const tagSep = "\x1f"
 
-const taskColumns = `t.id, t.title, t.description, t.due_at, t.priority, t.category, t.parent_id, t.notes,
+const baseTaskColumns = `t.id, t.title, t.description, t.due_at, t.priority, t.category, t.parent_id, t.notes,
 	t.status, t.position, t.created_at, t.updated_at, t.completed_at, t.archived_at, t.deleted_at, t.version,
 	(SELECT group_concat(tag, char(31)) FROM task_tags WHERE task_id = t.id)`
+
+// taskColumns is the SELECT list scanTask expects; dependencies exist from
+// schema v4 on.
+func (s *Store) taskColumns() string {
+	if s.schema < 4 {
+		return baseTaskColumns + `, NULL`
+	}
+	return baseTaskColumns + `, (SELECT group_concat(depends_on, char(31)) FROM task_deps WHERE task_id = t.id)`
+}
 
 type scanner interface{ Scan(...any) error }
 
 func scanTask(r scanner) (*Task, error) {
 	var t Task
-	var due, completed, archived, deleted, tags sql.NullString
+	var due, completed, archived, deleted, tags, deps sql.NullString
 	var created, updated string
 	if err := r.Scan(&t.ID, &t.Title, &t.Description, &due, &t.Priority, &t.Category, &t.ParentID, &t.Notes,
-		&t.Status, &t.Position, &created, &updated, &completed, &archived, &deleted, &t.Version, &tags); err != nil {
+		&t.Status, &t.Position, &created, &updated, &completed, &archived, &deleted, &t.Version, &tags, &deps); err != nil {
 		return nil, err
 	}
 	var err error
@@ -75,6 +84,11 @@ func scanTask(r scanner) (*Task, error) {
 	if tags.Valid && tags.String != "" {
 		t.Tags = strings.Split(tags.String, tagSep)
 		slices.Sort(t.Tags)
+	}
+	t.DependsOn = []string{}
+	if deps.Valid && deps.String != "" {
+		t.DependsOn = strings.Split(deps.String, tagSep)
+		slices.Sort(t.DependsOn)
 	}
 	return &t, nil
 }
@@ -131,7 +145,7 @@ func (s *Store) write(kind, summary string, fn func(x *txn) error) (int64, error
 }
 
 func (x *txn) get(id string) (*Task, error) {
-	t, err := scanTask(x.tx.QueryRow(`SELECT `+taskColumns+` FROM tasks t WHERE t.id = ?`, id))
+	t, err := scanTask(x.tx.QueryRow(`SELECT `+x.s.taskColumns()+` FROM tasks t WHERE t.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: task %s", ErrNotFound, id)
 	}
@@ -187,6 +201,16 @@ func (x *txn) put(t *Task) error {
 			return err
 		}
 	}
+	if x.s.schema >= 4 {
+		if _, err := x.tx.Exec(`DELETE FROM task_deps WHERE task_id = ?`, t.ID); err != nil {
+			return err
+		}
+		for _, dep := range t.DependsOn {
+			if _, err := x.tx.Exec(`INSERT INTO task_deps(task_id, depends_on) VALUES (?, ?)`, t.ID, dep); err != nil {
+				return err
+			}
+		}
+	}
 	return x.snapshotVersion(t)
 }
 
@@ -215,6 +239,11 @@ func (x *txn) save(action string, before, after *Task) (bool, error) {
 	}
 	if before == nil || before.ParentID != after.ParentID {
 		if err := x.checkParent(after); err != nil {
+			return false, err
+		}
+	}
+	if before == nil || !slices.Equal(before.DependsOn, after.DependsOn) {
+		if err := x.checkDeps(after); err != nil {
 			return false, err
 		}
 	}
@@ -271,6 +300,56 @@ func (x *txn) checkParent(t *Task) error {
 	return nil
 }
 
+// checkDeps ensures every dependency exists and creates no cycle.
+func (x *txn) checkDeps(t *Task) error {
+	if len(t.DependsOn) == 0 {
+		return nil
+	}
+	if x.s.schema < 4 {
+		return fmt.Errorf("%w: task dependencies need schema v4", ErrInvalid)
+	}
+	for _, dep := range t.DependsOn {
+		d, err := x.get(dep)
+		if err != nil {
+			return fmt.Errorf("%w: dependency %s does not exist", ErrInvalid, dep)
+		}
+		if d.Deleted() {
+			return fmt.Errorf("%w: dependency %s is deleted", ErrInvalid, dep)
+		}
+	}
+	// Walk the dependency graph from t's dependencies looking for t.
+	seen := map[string]bool{}
+	stack := slices.Clone(t.DependsOn)
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if id == t.ID {
+			return fmt.Errorf("%w: dependencies of %s would create a cycle", ErrInvalid, t.ID)
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		rows, err := x.tx.Query(`SELECT depends_on FROM task_deps WHERE task_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var next string
+			if err := rows.Scan(&next); err != nil {
+				rows.Close()
+				return err
+			}
+			stack = append(stack, next)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (x *txn) nextPosition() (float64, error) {
 	var p sql.NullFloat64
 	err := x.tx.QueryRow(`SELECT max(position) FROM tasks`).Scan(&p)
@@ -318,6 +397,7 @@ func diffTasks(before, after *Task) map[string]Change {
 	add("priority", b.Priority.String(), after.Priority.String(), b.Priority != after.Priority)
 	add("status", strVal(string(b.Status)), string(after.Status), b.Status != after.Status)
 	add("tags", nilIfEmpty(b.Tags), nilIfEmpty(after.Tags), !slices.Equal(b.Tags, after.Tags))
+	add("depends_on", nilIfEmpty(b.DependsOn), nilIfEmpty(after.DependsOn), !slices.Equal(b.DependsOn, after.DependsOn))
 	add("deleted_at", timeVal(b.DeletedAt), timeVal(after.DeletedAt), !timeEq(b.DeletedAt, after.DeletedAt))
 	if before != nil {
 		add("position", b.Position, after.Position, b.Position != after.Position)

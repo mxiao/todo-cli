@@ -123,7 +123,7 @@ func (s *Store) List(f Filter) ([]Task, error) {
 		}
 	}
 
-	sql := `SELECT ` + taskColumns + ` FROM tasks t`
+	sql := `SELECT ` + s.taskColumns() + ` FROM tasks t`
 	if len(where) > 0 {
 		sql += " WHERE " + strings.Join(where, " AND ")
 	}

@@ -81,4 +81,21 @@ CREATE TABLE conflicts (
 );
 CREATE INDEX idx_conflicts_task ON conflicts(task_id, id);
 `,
+	// v4: task dependencies (a task waits for the tasks it depends on) and
+	// per-module schema versions for packages that keep their own tables
+	// in this database (llm, prompt).
+	`
+CREATE TABLE task_deps (
+	task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	depends_on TEXT NOT NULL,
+	PRIMARY KEY (task_id, depends_on)
+);
+CREATE INDEX idx_task_deps_dep ON task_deps(depends_on);
+CREATE TABLE module_migrations (
+	module     TEXT NOT NULL,
+	version    INTEGER NOT NULL,
+	applied_at TEXT NOT NULL,
+	PRIMARY KEY (module, version)
+);
+`,
 }
