@@ -1,0 +1,56 @@
+name: flowos-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: hashFiles('pyproject.toml', 'requirements.txt', 'setup.py') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run tests with a report
+        shell: bash
+        run: |
+          mkdir -p flowos-report
+          if [ -f go.mod ] && [ -n "$(go list ./... 2>/dev/null)" ]; then
+            go test -json -coverprofile=flowos-report/go-cover.out ./... > flowos-report/go-test.json || true
+            go tool cover -func=flowos-report/go-cover.out > flowos-report/go-coverage.txt 2>/dev/null || true
+          fi
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then npm ci --no-audit --no-fund || true; else npm install --no-audit --no-fund || true; fi
+            if grep -q '"vitest"' package.json; then
+              npx vitest run --reporter=junit --outputFile=flowos-report/node-junit.xml || true
+            else
+              node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=flowos-report/node-junit.xml || true
+            fi
+          fi
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f setup.py ]; then
+            python -m pip install --upgrade pip pytest pytest-cov >/dev/null
+            if [ -f requirements.txt ]; then pip install -r requirements.txt >/dev/null || true; fi
+            if [ -f pyproject.toml ]; then pip install -e . >/dev/null 2>&1 || true; fi
+            python -m pytest -q --junitxml=flowos-report/py-junit.xml --cov=. --cov-report=xml:flowos-report/py-coverage.xml || true
+          fi
+          ls -la flowos-report
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowos-test-report
+          path: flowos-report/
+          if-no-files-found: ignore
