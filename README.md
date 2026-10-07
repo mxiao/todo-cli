@@ -15,7 +15,7 @@ packages/server/   local web service: REST API + live change events over the sam
 packages/llm/      OpenAI-compatible model client, permission policy, NL intake, decisions, self-optimisation
 packages/prompt/   prompt summaries → versioned, reusable templates with {{variables}}
 packages/agent/    agent runs: adapters (command line, HTTP, prompt agent, registered), logs, control, result write-back
-apps/web/          browser task manager (plain HTML/CSS/ES modules, embedded into the binary)
+apps/web/          browser task manager + model/agent views (plain HTML/CSS/ES modules, embedded into the binary)
 e2e/               node-pty end-to-end tests of the TUI; e2e/web: Playwright tests of the web UI
 ```
 
@@ -37,7 +37,8 @@ go build -o bin/todo ./cmd/todo   # or: npm run build
 go test ./...                     # Go unit tests + TUI tests on a real pseudo-terminal
 npm install && npm test           # go test ./..., web module unit tests and the node-pty TUI suite (e2e/)
 npx playwright install chromium   # once
-npm run test:e2e                  # Playwright: web UI against a real `todo serve` + CLI (Chromium)
+npm run test:e2e                  # Playwright: web UI against a real `todo serve` + CLI (Chromium);
+                                  # model/agent views use a mock API (e2e/web/ai-mock.mjs) plus real-service checks
 npm run test:e2e:all              # same on Chromium, Firefox and WebKit (Safari engine)
 ```
 
@@ -304,6 +305,35 @@ reload (it is kept in `localStorage` until saved or cancelled). The page is plai
 modules with no build step, embedded into the binary and served with a strict Content-Security-Policy;
 it supports current Safari, Chrome, Edge and Firefox. `TODO_CLI_WEB_DIR=apps/web todo serve` (or
 `npm run dev:web`) serves the files from disk while working on the page.
+
+### Model and agents in the browser
+
+The top bar shows the active model and the **permission mode** (仅建议 / 执行前确认 / 自动执行), which
+can be switched there (FR-305). **AI 助手** (`i`) opens a panel with the same features as `todo ai`,
+`todo agent` and `todo prompt`, over the same REST API and data (FR-702…FR-704):
+
+- **创建任务**: describe tasks in natural language; the parsed tasks are previewed with their fields
+  and can be edited, accepted one by one or all at once, rejected or undone. A clarifying question is
+  answered in place; the result counts created / updated / not executed / failed items.
+- **辅助决策**: summary, risks and the suggested order with reasons; each proposed change shows its
+  before/after diff and can be accepted, rejected, edited or undone; 重新决策 asks again with
+  feedback. 自我优化建议 lists the model's improvement proposals with their diffs.
+- **智能体运行**: every run with status, stage and progress, start/end time and duration, the selection
+  (user or model), the final prompt, attempts, results and the live log (output, commands, errors);
+  pause, resume, cancel, retry (with extra context), confirm or reject a start.
+- **提示词模板**: original prompt, structured summary and body of each template; reuse it with new
+  variable values (preview or create an agent task), copy it, or summarize a new prompt into one.
+- **模型与智能体**: model profiles (switch, test connection), permission mode and custom confirm list,
+  agents (add/edit/delete with adapter, command, directory, environment names, timeout, I/O modes) and
+  the available adapters.
+- **执行历史**: agent runs, model sessions (open one to act on it) and the command/agent action log.
+
+The task detail pane has an **智能体执行** block: choose an agent or 自动选择, optionally a prompt
+template with its variables and extra context, preview the final prompt, start (`g` jumps there), and
+see the task's runs with their controls and every written-back result with its type, source agent and
+time (FR-501, FR-511). Running work refreshes every second while anything is active. Model keys never
+reach the page: it only shows whether a key is set and where it comes from. When the model module is
+unavailable the panel says so and task management keeps working (FR-606).
 
 ### REST API
 

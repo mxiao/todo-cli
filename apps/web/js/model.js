@@ -53,6 +53,8 @@ export const ACTOR_LABELS = {
   tui: '终端界面',
   web: '网页',
   import: '导入',
+  llm: '大模型',
+  agent: '智能体',
 };
 
 export const ACTION_LABELS = {
@@ -69,6 +71,13 @@ export const ACTION_LABELS = {
   reorder: '调整顺序',
   revert: '恢复历史版本',
   import: '导入',
+  agent_run: '启动智能体',
+  agent_result: '智能体结果回写',
+  agent_succeeded: '智能体执行成功',
+  agent_partial: '智能体部分成功',
+  agent_failed: '智能体执行失败',
+  agent_cancelled: '智能体已取消',
+  agent_unknown: '智能体结果未知',
 };
 
 export const FIELD_LABELS = {
@@ -85,6 +94,13 @@ export const FIELD_LABELS = {
   completed_at: '完成时间',
   archived_at: '归档时间',
   deleted_at: '删除时间',
+  depends_on: '依赖',
+  run: '运行',
+  agent: '智能体',
+  result: '结果',
+  result_type: '结果类型',
+  result_version: '结果版本',
+  error: '错误',
 };
 
 export function actionLabel(action) {
@@ -94,7 +110,11 @@ export function actionLabel(action) {
   return action || '';
 }
 
+// actorLabel names who made a change; agents record "agent/<name>" and
+// model changes "llm" (FR-307, FR-511).
 export function actorLabel(actor) {
+  if (actor && actor.startsWith('agent/')) return `智能体 ${actor.slice(6)}`;
+  if (actor && actor.startsWith('llm/')) return `大模型（${actor.slice(4) === 'auto' ? '自动执行' : '用户确认'}）`;
   return ACTOR_LABELS[actor] || actor || '未知';
 }
 
@@ -482,6 +502,8 @@ const ERROR_MESSAGES = {
   forbidden_origin: '拒绝跨站请求',
   body_too_large: '内容过长',
   internal_error: '本地服务内部错误，请查看服务日志',
+  llm_unavailable: '大模型功能不可用',
+  agents_unavailable: '智能体功能不可用',
 };
 
 // errorMessage turns an API error into a short Chinese message; the
