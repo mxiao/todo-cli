@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,7 +388,8 @@ func TestStatusCommand(t *testing.T) {
 	}
 
 	human := h.ok("status")
-	for _, want := range []string{"data dir:    " + h.dir, "schema v2/v2", "model:       configured (openai/gpt-test", "api key set"} {
+	schema := fmt.Sprintf("schema v%d/v%d", core.LatestSchemaVersion(), core.LatestSchemaVersion())
+	for _, want := range []string{"data dir:    " + h.dir, schema, "model:       configured (openai/gpt-test", "api key set"} {
 		if !strings.Contains(human, want) {
 			t.Errorf("human status missing %q:\n%s", want, human)
 		}

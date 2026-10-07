@@ -100,44 +100,50 @@ func escapeLike(s string) string {
 
 // Update applies a partial patch to one task.
 func (s *Store) Update(id string, p TaskPatch) (*Task, error) {
-	res, err := s.mutate("update", "update", []string{id}, func(x *txn, t *Task) error {
-		if p.ExpectedVersion != 0 && p.ExpectedVersion != t.Version {
-			return fmt.Errorf("%w: task %s is at version %d, expected %d (it was changed elsewhere; reload and retry)",
-				ErrConflict, t.ID, t.Version, p.ExpectedVersion)
+	res, err := s.mutate("update", "update", []string{id}, nil, func(x *txn, t *Task) error {
+		if err := checkVersion(t, p.ExpectedVersion); err != nil {
+			return err
 		}
-		setStr(&t.Title, p.Title)
-		setStr(&t.Description, p.Description)
-		setStr(&t.Notes, p.Notes)
-		setStr(&t.Category, p.Category)
-		setStr(&t.ParentID, p.ParentID)
-		if p.ClearDue {
-			t.DueAt = nil
-		} else if p.DueAt != nil {
-			d := p.DueAt.UTC()
-			t.DueAt = &d
-		}
-		if p.Priority != nil {
-			t.Priority = *p.Priority
-		}
-		if p.Tags != nil {
-			t.Tags = slices.Clone(*p.Tags)
-		}
-		t.Tags = NormalizeTags(append(t.Tags, p.AddTags...))
-		if rm := NormalizeTags(p.RemoveTags); len(rm) > 0 {
-			t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool { return slices.Contains(rm, tag) })
-		}
-		if p.Status != nil {
-			if !p.Status.valid() {
-				return fmt.Errorf("%w: invalid status %q", ErrInvalid, *p.Status)
-			}
-			applyStatus(t, *p.Status, x.now)
-		}
-		return nil
+		return ApplyPatch(t, p, x.now)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &res.Tasks[0], nil
+}
+
+// ApplyPatch applies p to t in memory (no version check, no persistence).
+// Update uses it; callers may use it to preview an edit, e.g. to show
+// what a rejected concurrent edit would have produced.
+func ApplyPatch(t *Task, p TaskPatch, now time.Time) error {
+	setStr(&t.Title, p.Title)
+	setStr(&t.Description, p.Description)
+	setStr(&t.Notes, p.Notes)
+	setStr(&t.Category, p.Category)
+	setStr(&t.ParentID, p.ParentID)
+	if p.ClearDue {
+		t.DueAt = nil
+	} else if p.DueAt != nil {
+		d := p.DueAt.UTC()
+		t.DueAt = &d
+	}
+	if p.Priority != nil {
+		t.Priority = *p.Priority
+	}
+	if p.Tags != nil {
+		t.Tags = slices.Clone(*p.Tags)
+	}
+	t.Tags = NormalizeTags(append(t.Tags, p.AddTags...))
+	if rm := NormalizeTags(p.RemoveTags); len(rm) > 0 {
+		t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool { return slices.Contains(rm, tag) })
+	}
+	if p.Status != nil {
+		if !p.Status.valid() {
+			return fmt.Errorf("%w: invalid status %q", ErrInvalid, *p.Status)
+		}
+		applyStatus(t, *p.Status, now.UTC())
+	}
+	return nil
 }
 
 func setStr(dst *string, v *string) {
@@ -167,7 +173,11 @@ func (s *Store) Archive(ids ...string) (*Result, error) {
 }
 
 func (s *Store) setStatus(action string, st Status, ids []string) (*Result, error) {
-	return s.mutate(action, action, ids, func(x *txn, t *Task) error {
+	return s.setStatusChecked(action, st, ids, nil)
+}
+
+func (s *Store) setStatusChecked(action string, st Status, ids []string, expect map[string]int64) (*Result, error) {
+	return s.mutate(action, action, ids, expect, func(x *txn, t *Task) error {
 		applyStatus(t, st, x.now)
 		return nil
 	})
@@ -175,7 +185,11 @@ func (s *Store) setStatus(action string, st Status, ids []string) (*Result, erro
 
 // SetPriority changes the priority of tasks.
 func (s *Store) SetPriority(p Priority, ids ...string) (*Result, error) {
-	return s.mutate("priority", "set priority "+p.String(), ids, func(x *txn, t *Task) error {
+	return s.setPriority(p, ids, nil)
+}
+
+func (s *Store) setPriority(p Priority, ids []string, expect map[string]int64) (*Result, error) {
+	return s.mutate("priority", "set priority "+p.String(), ids, expect, func(x *txn, t *Task) error {
 		t.Priority = p
 		return nil
 	})
@@ -190,10 +204,14 @@ type MoveTarget struct {
 
 // Move re-files tasks under a category and/or parent task.
 func (s *Store) Move(target MoveTarget, ids ...string) (*Result, error) {
+	return s.move(target, ids, nil)
+}
+
+func (s *Store) move(target MoveTarget, ids []string, expect map[string]int64) (*Result, error) {
 	if target.Category == nil && target.ParentID == nil {
 		return nil, fmt.Errorf("%w: move needs a category or parent", ErrInvalid)
 	}
-	return s.mutate("move", "move", ids, func(x *txn, t *Task) error {
+	return s.mutate("move", "move", ids, expect, func(x *txn, t *Task) error {
 		setStr(&t.Category, target.Category)
 		setStr(&t.ParentID, target.ParentID)
 		return nil
@@ -203,7 +221,11 @@ func (s *Store) Move(target MoveTarget, ids ...string) (*Result, error) {
 // Delete soft-deletes tasks; they disappear from listings but can be
 // restored or brought back with Undo.
 func (s *Store) Delete(ids ...string) (*Result, error) {
-	return s.mutate("delete", "delete", ids, func(x *txn, t *Task) error {
+	return s.delete(ids, nil)
+}
+
+func (s *Store) delete(ids []string, expect map[string]int64) (*Result, error) {
+	return s.mutate("delete", "delete", ids, expect, func(x *txn, t *Task) error {
 		t.DeletedAt = &x.now
 		return nil
 	})
@@ -211,12 +233,19 @@ func (s *Store) Delete(ids ...string) (*Result, error) {
 
 // Restore brings soft-deleted tasks back.
 func (s *Store) Restore(ids ...string) (*Result, error) {
+	return s.restore(ids, nil)
+}
+
+func (s *Store) restore(ids []string, expect map[string]int64) (*Result, error) {
 	ids = dedupe(ids)
 	res := &Result{}
 	opID, err := s.write("restore", "restore", func(x *txn) error {
 		for _, id := range ids {
 			t, err := x.get(id)
 			if err != nil {
+				return err
+			}
+			if err := checkVersion(t, expect[id]); err != nil {
 				return err
 			}
 			before := t.clone()
@@ -242,6 +271,8 @@ type Placement struct {
 	After  string
 	Top    bool
 	Bottom bool
+	// ExpectedVersion enables optimistic locking when non-zero.
+	ExpectedVersion int64
 }
 
 // Reorder moves a task within the manual sort order.
@@ -255,7 +286,10 @@ func (s *Store) Reorder(id string, pl Placement) (*Task, error) {
 	if n != 1 {
 		return nil, fmt.Errorf("%w: choose exactly one of before, after, top or bottom", ErrInvalid)
 	}
-	res, err := s.mutate("reorder", "reorder", []string{id}, func(x *txn, t *Task) error {
+	res, err := s.mutate("reorder", "reorder", []string{id}, nil, func(x *txn, t *Task) error {
+		if err := checkVersion(t, pl.ExpectedVersion); err != nil {
+			return err
+		}
 		pos, err := x.placement(t.ID, pl)
 		if err != nil {
 			return err
@@ -307,8 +341,9 @@ func (x *txn) placement(self string, pl Placement) (float64, error) {
 }
 
 // mutate loads each live task, applies fn and saves it, all in one
-// transaction recorded as a single undoable operation.
-func (s *Store) mutate(kind, summary string, ids []string, fn func(x *txn, t *Task) error) (*Result, error) {
+// transaction recorded as a single undoable operation. expect optionally
+// pins task versions (optimistic locking); a mismatch aborts everything.
+func (s *Store) mutate(kind, summary string, ids []string, expect map[string]int64, fn func(x *txn, t *Task) error) (*Result, error) {
 	ids = dedupe(ids)
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("%w: no task ids given", ErrInvalid)
@@ -318,6 +353,9 @@ func (s *Store) mutate(kind, summary string, ids []string, fn func(x *txn, t *Ta
 		for _, id := range ids {
 			t, err := x.getLive(id)
 			if err != nil {
+				return err
+			}
+			if err := checkVersion(t, expect[id]); err != nil {
 				return err
 			}
 			before := t.clone()
@@ -350,4 +388,71 @@ func dedupe(ids []string) []string {
 		}
 	}
 	return out
+}
+
+// Batch actions accepted by ApplyBatch.
+const (
+	BatchComplete = "complete"
+	BatchStart    = "start"
+	BatchReopen   = "reopen"
+	BatchArchive  = "archive"
+	BatchDelete   = "delete"
+	BatchRestore  = "restore"
+	BatchPriority = "priority"
+	BatchMove     = "move"
+)
+
+// BatchActions lists every ApplyBatch action.
+var BatchActions = []string{BatchComplete, BatchStart, BatchReopen, BatchArchive, BatchDelete, BatchRestore, BatchPriority, BatchMove}
+
+// BatchRequest is one action applied to many tasks in one transaction.
+type BatchRequest struct {
+	Action string
+	IDs    []string
+	// Expect optionally pins the version each task must still have; any
+	// mismatch fails the whole batch with a ConflictError.
+	Expect   map[string]int64
+	Priority Priority   // for BatchPriority
+	Move     MoveTarget // for BatchMove
+}
+
+// ApplyBatch runs a batch action atomically as one undoable operation.
+func (s *Store) ApplyBatch(b BatchRequest) (*Result, error) {
+	switch b.Action {
+	case BatchComplete:
+		return s.setStatusChecked("complete", StatusDone, b.IDs, b.Expect)
+	case BatchStart:
+		return s.setStatusChecked("start", StatusInProgress, b.IDs, b.Expect)
+	case BatchReopen:
+		return s.setStatusChecked("reopen", StatusTodo, b.IDs, b.Expect)
+	case BatchArchive:
+		return s.setStatusChecked("archive", StatusArchived, b.IDs, b.Expect)
+	case BatchDelete:
+		return s.delete(b.IDs, b.Expect)
+	case BatchRestore:
+		return s.restore(b.IDs, b.Expect)
+	case BatchPriority:
+		if !b.Priority.valid() {
+			return nil, fmt.Errorf("%w: invalid priority %d", ErrInvalid, int(b.Priority))
+		}
+		return s.setPriority(b.Priority, b.IDs, b.Expect)
+	case BatchMove:
+		return s.move(b.Move, b.IDs, b.Expect)
+	}
+	return nil, fmt.Errorf("%w: unknown batch action %q (want %s)", ErrInvalid, b.Action, strings.Join(BatchActions, "|"))
+}
+
+// StatusAction maps a target status to the batch action that reaches it.
+func StatusAction(st Status) (string, error) {
+	switch st {
+	case StatusTodo:
+		return BatchReopen, nil
+	case StatusInProgress:
+		return BatchStart, nil
+	case StatusDone:
+		return BatchComplete, nil
+	case StatusArchived:
+		return BatchArchive, nil
+	}
+	return "", fmt.Errorf("%w: invalid status %q", ErrInvalid, st)
 }

@@ -57,4 +57,28 @@ CREATE INDEX idx_tasks_updated  ON tasks(updated_at);
 CREATE INDEX idx_task_tags_tag  ON task_tags(tag);
 CREATE INDEX idx_history_task   ON task_history(task_id, id);
 `,
+	// v3: full snapshot of every task version (recoverable versions) and
+	// rejected concurrent edits kept for later resolution.
+	`
+CREATE TABLE task_versions (
+	task_id    TEXT NOT NULL,
+	version    INTEGER NOT NULL,
+	snapshot   TEXT NOT NULL,
+	actor      TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (task_id, version)
+);
+CREATE TABLE conflicts (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id         TEXT NOT NULL,
+	base_version    INTEGER NOT NULL,
+	current_version INTEGER NOT NULL,
+	actor           TEXT NOT NULL,
+	patch           TEXT NOT NULL,
+	created_at      TEXT NOT NULL,
+	resolved_at     TEXT,
+	resolution      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_conflicts_task ON conflicts(task_id, id);
+`,
 }
