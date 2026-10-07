@@ -35,6 +35,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/batch", s.handleBatch)
 	m.HandleFunc("POST /api/undo", s.handleUndo)
 	s.llmRoutes()
+	s.agentRoutes()
 	m.HandleFunc("/api/", s.handleUnknown)
 }
 

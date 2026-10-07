@@ -18,9 +18,11 @@ type ActionRecord struct {
 	Request   CommandSpec    `json:"request"`
 	Status    string         `json:"status"`
 	Result    *CommandResult `json:"result,omitempty"`
-	Actor     string         `json:"actor"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	// RunID is the agent run an agent item started.
+	RunID     string    `json:"run_id,omitempty"`
+	Actor     string    `json:"actor"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // runCommandItem runs an accepted command or agent item and records it.
@@ -32,6 +34,10 @@ func (s *Service) runCommandItem(ctx context.Context, sess *Session, it *Item, b
 	}
 	if err := checkEscalation(it.Command.Argv); err != nil {
 		it.Status, it.Message = ItemFailed, err.Error()
+		return
+	}
+	if l := s.agentLauncher(); l != nil && it.Kind == ItemAgent {
+		s.launchAgentItem(ctx, l, sess, it, by)
 		return
 	}
 	cfg, _, _ := s.AssistConfig()
@@ -75,6 +81,36 @@ func (s *Service) runCommandItem(ctx context.Context, sess *Session, it *Item, b
 	_, _ = s.db().Exec(`UPDATE llm_actions SET status = ?, result = ?, updated_at = ? WHERE id = ?`, status, string(b), fmtTime(s.store.Now()), it.ActionID)
 }
 
+// launchAgentItem starts an accepted agent item as an agent run and
+// records the start in the action log; the run itself keeps the status,
+// logs and results.
+func (s *Service) launchAgentItem(ctx context.Context, l AgentLauncher, sess *Session, it *Item, by string) {
+	req, _ := json.Marshal(map[string]any{"agent": it.Command.Agent, "task_id": it.TaskID, "argv": it.Command.Argv})
+	now := fmtTime(s.store.Now())
+	res, err := s.db().Exec(`INSERT INTO llm_actions(session_id, item, kind, request, status, actor, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
+		sess.ID, it.N, it.Kind, s.Redact(string(req)), Actor+"/"+by, now, now)
+	if err != nil {
+		it.Status, it.Message = ItemFailed, err.Error()
+		return
+	}
+	it.ActionID, _ = res.LastInsertId()
+	out, err := l.LaunchAgent(ctx, AgentLaunch{SessionID: sess.ID, Item: it.N, TaskID: it.TaskID, Agent: it.Command.Agent,
+		Reason: it.Reason, Prompt: it.Command.Prompt, By: by})
+	status := "started"
+	if err != nil {
+		status, it.Status, it.Message = "failed", ItemFailed, s.Redact(err.Error())
+	} else {
+		it.Status, it.AppliedBy, it.NeedsConfirm = ItemApplied, by, false
+		it.Command.RunID = out.RunID
+		it.Message = fmt.Sprintf("已启动智能体运行 %s（%s）", out.RunID, out.Status)
+		if out.Message != "" {
+			it.Message += "：" + s.Redact(out.Message)
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"run_id": it.Command.RunID, "message": it.Message})
+	_, _ = s.db().Exec(`UPDATE llm_actions SET status = ?, result = ?, updated_at = ? WHERE id = ?`, status, string(b), fmtTime(s.store.Now()), it.ActionID)
+}
+
 // agentPrompt is the prompt passed to an agent on standard input; it is
 // shown to the user before the agent starts (FR-506).
 func (s *Service) agentPrompt(it *Item) string {
@@ -114,7 +150,12 @@ func (s *Service) Actions(limit int) ([]ActionRecord, error) {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(req), &a.Request)
-		if result != "{}" {
+		var launched struct {
+			RunID string `json:"run_id"`
+		}
+		if _ = json.Unmarshal([]byte(result), &launched); launched.RunID != "" {
+			a.RunID = launched.RunID
+		} else if result != "{}" {
 			a.Result = &CommandResult{}
 			_ = json.Unmarshal([]byte(result), a.Result)
 		}

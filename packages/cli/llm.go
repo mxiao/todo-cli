@@ -13,7 +13,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mxiao/todo-cli/packages/agent"
 	"github.com/mxiao/todo-cli/packages/llm"
+	"github.com/mxiao/todo-cli/packages/prompt"
 )
 
 // LLMHooks replace the model plumbing, so tests run against mock models;
@@ -51,6 +53,16 @@ func (a *app) llm() (*llm.Service, error) {
 		return nil, err
 	}
 	a.llmSvc = svc
+	// Accepted agent items of model decisions start agent runs.
+	if lib, err := prompt.Open(s); err == nil {
+		lib.Redact = svc.Redact
+		if m, err := agent.Open(s, agent.Options{LLM: svc, Prompts: lib, Origin: origin, Getenv: a.env.Getenv}); err == nil {
+			svc.SetAgentLauncher(m)
+			a.agentMgr = m
+		} else {
+			a.agentErr = err
+		}
+	}
 	return svc, nil
 }
 
@@ -624,7 +636,9 @@ func llmAgent(a *app, args []string) error {
 		if len(pos) < 2 {
 			return usagef("usage: todo llm agent add <name> [--desc D] [--dir DIR] -- <command> [args...]")
 		}
-		ag := llm.AgentProfile{Name: pos[0], Command: pos[1:], Dir: *dir, Description: *desc}
+		// These agents read the task prompt as plain text on stdin and
+		// answer in plain text (`todo agent add` offers every option).
+		ag := llm.AgentProfile{Name: pos[0], Command: pos[1:], Dir: *dir, Description: *desc, Input: "prompt-stdin", Output: "text"}
 		if _, err := svc.UpdateSettings(func(s *llm.Settings) error {
 			s.Agents = slices.DeleteFunc(s.Agents, func(x llm.AgentProfile) bool { return x.Name == ag.Name })
 			s.Agents = append(s.Agents, ag)
@@ -719,6 +733,9 @@ func llmActions(a *app, args []string) error {
 		exit := ""
 		if x.Result != nil {
 			exit = "exit " + strconv.Itoa(x.Result.ExitCode)
+		}
+		if x.RunID != "" {
+			exit = "run " + x.RunID
 		}
 		a.printf("%s  %s #%d %-7s %-9s %s  %s  %s\n", a.localTime(x.CreatedAt), x.SessionID, x.Item, x.Kind, x.Status, x.Actor,
 			strings.Join(x.Request.Argv, " "), exit)
