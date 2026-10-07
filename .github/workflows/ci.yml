@@ -39,10 +39,16 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # Web task manager: unit tests of the page's modules, then Playwright
-  # against a real `todo serve` + CLI on the same SQLite data (Chromium).
-  web-e2e:
-    runs-on: ubuntu-latest
+  # End-to-end acceptance and compatibility suite (`npm run test:e2e`) on
+  # macOS, the target platform: browser acceptance on Chromium, Firefox and
+  # WebKit plus the installed Chrome and Edge, the TUI on node-pty with the
+  # Terminal.app and iTerm2 profiles, CLI/API/data checks and the web UI
+  # regression suite. Model and agents are the fixed mocks of tests/e2e.
+  # The traceability report (reports/e2e) is kept for every run.
+  e2e:
+    runs-on: macos-latest
+    env:
+      TODO_E2E_CHANNELS: chrome,msedge
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,14 +57,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      - run: npm ci
+      - run: npx playwright install chromium firefox webkit
       - run: npm run test:web
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: playwright-report
+          name: e2e-acceptance-report
           path: |
-            playwright-report/
+            reports/e2e/
             test-results/

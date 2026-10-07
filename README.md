@@ -17,6 +17,7 @@ packages/prompt/   prompt summaries → versioned, reusable templates with {{var
 packages/agent/    agent runs: adapters (command line, HTTP, prompt agent, registered), logs, control, result write-back
 apps/web/          browser task manager + model/agent views (plain HTML/CSS/ES modules, embedded into the binary)
 e2e/               node-pty end-to-end tests of the TUI; e2e/web: Playwright tests of the web UI
+tests/e2e/         end-to-end acceptance & compatibility suite (`npm run test:e2e`, see tests/e2e/README.md)
 ```
 
 Model features (`packages/llm`, `packages/prompt`) and the agents (`packages/agent`) build
@@ -36,11 +37,18 @@ the pure-Go `modernc.org/sqlite` driver, which needs no cgo and no runtime depen
 go build -o bin/todo ./cmd/todo   # or: npm run build
 go test ./...                     # Go unit tests + TUI tests on a real pseudo-terminal
 npm install && npm test           # go test ./..., web module unit tests and the node-pty TUI suite (e2e/)
-npx playwright install chromium   # once
-npm run test:e2e                  # Playwright: web UI against a real `todo serve` + CLI (Chromium);
-                                  # model/agent views use a mock API (e2e/web/ai-mock.mjs) plus real-service checks
-npm run test:e2e:all              # same on Chromium, Firefox and WebKit (Safari engine)
+npx playwright install chromium firefox webkit   # once
+npm run test:e2e                  # acceptance + compatibility suite (tests/e2e) on Chromium, Firefox, WebKit,
+                                  # the TUI on node-pty (Terminal.app / iTerm2 profiles), CLI/API/data checks,
+                                  # and the web UI regression suite (e2e/web, Chromium)
+TODO_E2E_CHANNELS=chrome,msedge npm run test:e2e   # also the installed branded Chrome / Edge
+npm run test:e2e:all              # regression suite on all three engines as well
 ```
+
+`npm run test:e2e` runs the real binary with a fixed mock model (OpenAI-compatible) and fixed mock agent
+scripts, so no model key or network is needed. It writes a traceable report to `reports/e2e/`
+(`traceability.md`: acceptance items → requirements → tests per browser/terminal, measured sync latency,
+compatibility matrix, deferred items; plus HTML, JUnit and JSON reports).
 
 `npm install` pulls `node-pty` (dev only) and restores the executable bit on its prebuilt macOS
 `spawn-helper`. Without `node-pty` the node suite is skipped; the Go PTY tests still cover the same flows.
