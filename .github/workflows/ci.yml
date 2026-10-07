@@ -23,3 +23,18 @@ jobs:
           if [ -z "$(go list ./... 2>/dev/null)" ]; then echo "no Go packages yet"; exit 0; fi
           go vet ./...
           go test -count=1 ./...
+
+  # Interactive TUI driven through node-pty on macOS, the target platform:
+  # key and mouse escape sequences as Terminal.app / iTerm2 send them.
+  tui-pty:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
