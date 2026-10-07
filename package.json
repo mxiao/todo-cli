@@ -1,0 +1,11 @@
+{
+  "name": "todo-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first todo manager: CLI now, TUI/web/LLM/agents in later releases",
+  "scripts": {
+    "test": "go test ./...",
+    "build": "go build -o bin/todo ./cmd/todo",
+    "lint": "gofmt -l . && go vet ./..."
+  }
+}
